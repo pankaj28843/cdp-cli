@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 )
 
 const quotaFixtureScope = "Plan limits\nShared across Codex, Work, Workspace Agents, and ChatGPT for Excel. Chat conversations are not included.\nWeekly limit\nResets in 5d 13h\n19% left"
@@ -140,5 +143,61 @@ func TestQuotaGuardAmbiguousResetFailsClosedAndStateIsPrivate(t *testing.T) {
 	}
 	if _, ok := raw["target_id"]; ok {
 		t.Fatal("private guard state should not persist target identifiers")
+	}
+}
+
+func TestQuotaTargetCreatesOncePersistsAndReuses(t *testing.T) {
+	ctx := context.Background()
+	fake := &keepOpenPolicyFakeClient{targets: map[string]cdp.TargetInfo{}, pendingClose: map[string]int{}}
+	a := newKeepOpenPolicyTestApp(t)
+	first, created, err := a.selectQuotaTarget(ctx, fake, "")
+	if err != nil || !created || first.TargetID == "" || first.URL != chatgptQuotaURL {
+		t.Fatalf("first selection: %+v created=%v err=%v", first, created, err)
+	}
+	if len(fake.targets) != 1 || len(fake.events) != 1 || fake.events[0] != "mark-persistent:"+first.TargetID {
+		t.Fatalf("created target not retained as persistent: targets=%+v events=%+v", fake.targets, fake.events)
+	}
+	second, created, err := a.selectQuotaTarget(ctx, fake, "")
+	if err != nil || created || second.TargetID != first.TargetID || len(fake.targets) != 1 {
+		t.Fatalf("repeat selection opened another tab: %+v created=%v err=%v", second, created, err)
+	}
+}
+
+func TestQuotaTargetExplicitFailureAndMultipleMatchReuse(t *testing.T) {
+	ctx := context.Background()
+	fake := &keepOpenPolicyFakeClient{targets: map[string]cdp.TargetInfo{
+		"other": {TargetID: "other", Type: "page", URL: "https://example.test/"},
+	}, pendingClose: map[string]int{}}
+	a := newKeepOpenPolicyTestApp(t)
+	if _, _, err := a.selectQuotaTarget(ctx, fake, "missing"); err == nil {
+		t.Fatal("missing explicit target was replaced")
+	}
+	if _, _, err := a.selectQuotaTarget(ctx, fake, "other"); err == nil {
+		t.Fatal("wrong explicit target was accepted")
+	}
+	if len(fake.targets) != 1 || len(fake.events) != 0 {
+		t.Fatalf("explicit failure mutated tabs: targets=%+v events=%+v", fake.targets, fake.events)
+	}
+	fake.targets["usage-a"] = cdp.TargetInfo{TargetID: "usage-a", Type: "page", URL: chatgptQuotaURL}
+	fake.targets["usage-b"] = cdp.TargetInfo{TargetID: "usage-b", Type: "page", URL: chatgptQuotaURL}
+	selected, created, err := a.selectQuotaTarget(ctx, fake, "")
+	if err != nil || created || selected.TargetID != "usage-a" {
+		t.Fatalf("multiple Settings tabs did not reuse stable first ID: %+v created=%v err=%v", selected, created, err)
+	}
+	if len(fake.targets) != 3 || len(fake.events) != 0 {
+		t.Fatalf("multiple-match selection mutated tabs: targets=%+v events=%+v", fake.targets, fake.events)
+	}
+}
+
+func TestQuotaAuthenticationRedirectClassification(t *testing.T) {
+	for _, raw := range []string{"https://chatgpt.com/auth/login", "https://chatgpt.com/login", "https://auth.openai.com/authorize"} {
+		if !quotaAuthURL(raw) {
+			t.Fatalf("login route was not classified: %s", raw)
+		}
+	}
+	for _, raw := range []string{chatgptQuotaURL, "https://example.test/login", "http://auth.openai.com/authorize"} {
+		if quotaAuthURL(raw) {
+			t.Fatalf("non-login route was classified: %s", raw)
+		}
 	}
 }

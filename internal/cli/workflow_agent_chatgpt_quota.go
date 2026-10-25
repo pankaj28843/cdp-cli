@@ -26,6 +26,7 @@ const chatgptQuotaSchemaVersion = "chatgpt-plan-quota/v1"
 
 var quotaPercentPattern = regexp.MustCompile(`^(\d{1,3})% left$`)
 var quotaResetPattern = regexp.MustCompile(`^Resets in (?:(\d+)d )?(?:(\d+)h)?(?:(?: )?(\d+)m)?$`)
+var errQuotaAuthRequired = errors.New("Settings tab requires sign-in")
 
 type quotaPageReading struct {
 	URL          string  `json:"url"`
@@ -49,6 +50,7 @@ type quotaSnapshot struct {
 	Source           string            `json:"source"`
 	SourceURL        string            `json:"source_url"`
 	TargetID         string            `json:"target_id"`
+	TargetCreated    bool              `json:"target_created"`
 	Guard            *quotaGuardResult `json:"guard,omitempty"`
 }
 
@@ -87,6 +89,15 @@ func validQuotaURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Scheme == "https" && u.Host == "chatgpt.com" &&
 		u.Path == "/settings/usage" && u.User == nil
+}
+
+func quotaAuthURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	return u.Host == "auth.openai.com" ||
+		u.Host == "chatgpt.com" && (u.Path == "/auth/login" || u.Path == "/login")
 }
 
 func parseQuotaReading(reading quotaPageReading, now time.Time) (quotaSnapshot, time.Duration, error) {
@@ -180,6 +191,64 @@ func refreshQuotaPage(ctx context.Context, session *cdp.PageSession) (quotaPageR
 	}
 }
 
+// A newly created target can still be about:blank when Target.createTarget
+// returns. Wait for the exact Settings document before requesting a reload.
+func waitQuotaPageReady(ctx context.Context, session *cdp.PageSession) error {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		reading, err := readQuotaPage(ctx, session)
+		if err == nil && validQuotaURL(reading.URL) && reading.SectionCount == 1 && reading.RowCount == 1 {
+			return nil
+		}
+		if err == nil && quotaAuthURL(reading.URL) {
+			return errQuotaAuthRequired
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("Settings / Usage did not become ready before timeout")
+		case <-ticker.C:
+		}
+	}
+}
+
+// selectQuotaTarget only creates a page for the default selection. An explicit
+// target is never replaced. Multiple matching tabs select a stable target ID.
+func (a *app) selectQuotaTarget(ctx context.Context, client cdp.CommandClient, targetID string) (cdp.TargetInfo, bool, error) {
+	if targetID != "" {
+		target, err := a.resolvePageTargetWithClient(ctx, client, targetID, "", "")
+		if err != nil {
+			return cdp.TargetInfo{}, false, err
+		}
+		if !validQuotaURL(target.URL) {
+			return cdp.TargetInfo{}, false, commandError("chatgpt_quota_wrong_target", "usage", "selected target is not ChatGPT Settings / Usage", ExitUsage, nil)
+		}
+		return target, false, nil
+	}
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		return cdp.TargetInfo{}, false, commandError("chatgpt_quota_unknown", "check", "Settings tabs could not be listed", ExitCheckFailed, nil)
+	}
+	var match cdp.TargetInfo
+	for _, target := range targets {
+		if target.Type != "page" || !validQuotaURL(target.URL) {
+			continue
+		}
+		if match.TargetID != "" && match.TargetID < target.TargetID {
+			continue
+		}
+		match = target
+	}
+	if match.TargetID != "" {
+		return match, false, nil
+	}
+	id, err := a.createPageTarget(ctx, client, chatgptQuotaURL)
+	if err != nil {
+		return cdp.TargetInfo{}, false, err
+	}
+	return cdp.TargetInfo{TargetID: id, Type: "page", URL: chatgptQuotaURL}, true, nil
+}
+
 func applyQuotaGuard(current quotaSnapshot, resetIn time.Duration, previous *quotaGuardState, beforeStop, afterStop int) (quotaGuardState, quotaGuardResult, error) {
 	next := quotaGuardState{SchemaVersion: chatgptQuotaSchemaVersion, QuotaScope: chatgptQuotaScope,
 		Phase: "before_reset", ObservedAt: current.ObservedAt, RemainingPercent: current.RemainingPercent,
@@ -271,8 +340,8 @@ func (a *app) newWorkflowAgentChatGPTQuotaCommand() *cobra.Command {
 	var beforeStop, afterStop int
 	var establishBeforeReset bool
 	cmd := &cobra.Command{
-		Use: "quota", Short: "Read the weekly subscription plan limit from an existing Settings tab",
-		Long: "Reload one existing ChatGPT Settings / Usage tab and read its visible weekly plan limit. " +
+		Use: "quota", Short: "Read the weekly subscription plan limit from a Settings tab",
+		Long: "Reuse one ChatGPT Settings / Usage tab or open and keep one if none exists, then reload and read its visible weekly plan limit. " +
 			"This is the shared Codex, Work, Workspace Agents, and ChatGPT for Excel allowance; chat conversations and API quota are excluded. " +
 			"The page shows only a rounded relative reset countdown, so reset_at and reset_timezone remain null. " +
 			"Optional --guard-state stores a private baseline for this session. An absent state requires explicit --establish-before-reset-baseline: stop at or below the before-reset threshold, " +
@@ -295,41 +364,41 @@ func (a *app) newWorkflowAgentChatGPTQuotaCommand() *cobra.Command {
 				return commandError("chatgpt_quota_browser_unavailable", "connection", "headed browser is unavailable", ExitConnection, nil)
 			}
 			defer closeClient(context.Background())
-			var target cdp.TargetInfo
-			if targetID != "" {
-				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, "", "")
-			} else {
-				target, err = a.resolvePageTargetWithClient(ctx, client, "", "/settings/usage", "")
-			}
+			target, created, err := a.selectQuotaTarget(ctx, client, targetID)
 			if err != nil {
 				return err
 			}
-			if !validQuotaURL(target.URL) {
-				return commandError("chatgpt_quota_wrong_target", "usage", "selected target is not ChatGPT Settings / Usage", ExitUsage, nil)
-			}
+			targetData := map[string]any{"target_id": target.TargetID, "target_created": created, "tab_preserved": true}
 			// Chrome can suspend a background Settings tab. Activate only this
-			// exact existing tab so its visible row hydrates before reload.
+			// selected tab so its visible row hydrates before reload.
 			if err := cdp.ActivateTargetWithClient(ctx, client, target.TargetID); err != nil {
-				return commandError("chatgpt_quota_unknown", "check", "Settings tab could not be activated", ExitCheckFailed, nil)
+				return commandErrorWithData("chatgpt_quota_unknown", "check", "Settings tab could not be activated", ExitCheckFailed, nil, targetData)
 			}
 			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, nil)
 			if err != nil {
-				return commandError("chatgpt_quota_unknown", "check", "Settings tab could not be attached", ExitCheckFailed, nil)
+				return commandErrorWithData("chatgpt_quota_unknown", "check", "Settings tab could not be attached", ExitCheckFailed, nil, targetData)
 			}
 			defer session.Close(context.Background())
+			if err := waitQuotaPageReady(ctx, session); err != nil {
+				if errors.Is(err, errQuotaAuthRequired) {
+					return commandErrorWithData("chatgpt_quota_auth_required", "check", err.Error(), ExitCheckFailed, nil, targetData)
+				}
+				return commandErrorWithData("chatgpt_quota_unknown", "check", err.Error(), ExitCheckFailed, nil, targetData)
+			}
 			reading, err := refreshQuotaPage(ctx, session)
 			if err != nil {
-				return commandError("chatgpt_quota_unknown", "check", err.Error(), ExitCheckFailed, nil)
+				return commandErrorWithData("chatgpt_quota_unknown", "check", err.Error(), ExitCheckFailed, nil, targetData)
 			}
 			snapshot, resetIn, err := parseQuotaReading(reading, time.Now())
 			if err != nil {
-				return commandError("chatgpt_quota_unknown", "check", err.Error(), ExitCheckFailed, nil)
+				return commandErrorWithData("chatgpt_quota_unknown", "check", err.Error(), ExitCheckFailed, nil, targetData)
 			}
 			snapshot.TargetID = target.TargetID
+			snapshot.TargetCreated = created
 			if guardPath != "" {
 				previous, err := loadQuotaGuard(guardPath)
 				if err != nil {
-					return commandError("chatgpt_quota_guard_unknown", "check", "private quota guard state could not be read", ExitCheckFailed, nil)
+					return commandErrorWithData("chatgpt_quota_guard_unknown", "check", "private quota guard state could not be read", ExitCheckFailed, nil, snapshot)
 				}
 				if previous == nil && !establishBeforeReset {
 					return commandErrorWithData("chatgpt_quota_guard_unknown", "check", "missing guard baseline: explicitly establish a before-reset baseline", ExitCheckFailed, nil, snapshot)
@@ -340,7 +409,7 @@ func (a *app) newWorkflowAgentChatGPTQuotaCommand() *cobra.Command {
 				}
 				snapshot.Guard = &decision
 				if err := saveQuotaGuard(guardPath, next); err != nil {
-					return commandError("chatgpt_quota_guard_unknown", "check", "private quota guard state could not be saved", ExitCheckFailed, nil)
+					return commandErrorWithData("chatgpt_quota_guard_unknown", "check", "private quota guard state could not be saved", ExitCheckFailed, nil, snapshot)
 				}
 				if decision.State == "stop" {
 					return commandErrorWithData("chatgpt_quota_guard_stop", "check", "weekly subscription quota reached the configured stop threshold", ExitCheckFailed, nil, snapshot)
@@ -349,7 +418,7 @@ func (a *app) newWorkflowAgentChatGPTQuotaCommand() *cobra.Command {
 			return a.render(ctx, fmt.Sprintf("weekly subscription plan limit: %d%% left; %s", snapshot.RemainingPercent, snapshot.ResetDisplay), snapshot)
 		},
 	}
-	cmd.Flags().StringVar(&targetID, "target", "", "exact existing Settings / Usage page target ID")
+	cmd.Flags().StringVar(&targetID, "target", "", "exact existing Settings / Usage page target ID; never replaced")
 	cmd.Flags().StringVar(&guardPath, "guard-state", "", "private per-session JSON guard state path; absent means read-only snapshot")
 	cmd.Flags().BoolVar(&establishBeforeReset, "establish-before-reset-baseline", false, "explicitly establish a before-reset phase when private guard state is absent")
 	cmd.Flags().IntVar(&beforeStop, "before-reset-stop-at", 1, "stop at or below this remaining percentage before a reset (with --guard-state)")

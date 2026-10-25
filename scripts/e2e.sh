@@ -344,7 +344,7 @@ grep -q -- '--guard-state string' <<<"$chatgpt_quota_help"
 grep -q -- '--establish-before-reset-baseline' <<<"$chatgpt_quota_help"
 grep -q -- '--before-reset-stop-at int' <<<"$chatgpt_quota_help"
 grep -q -- '--after-reset-stop-at int' <<<"$chatgpt_quota_help"
-"$binary" schema chatgpt-plan-quota --json | jq -e '.ok == true and .schema.name == "chatgpt-plan-quota" and (.schema.fields | map(.name) | index("remaining_percent")) and (.schema.fields | map(.name) | index("reset_at")) and (.schema.fields | map(.name) | index("guard"))' >/dev/null
+"$binary" schema chatgpt-plan-quota --json | jq -e '.ok == true and .schema.name == "chatgpt-plan-quota" and (.schema.fields | map(.name) | index("remaining_percent")) and (.schema.fields | map(.name) | index("reset_at")) and (.schema.fields | map(.name) | index("target_created")) and (.schema.fields | map(.name) | index("guard"))' >/dev/null
 grep -q 'download-attachments CONVERSATION_ID' <<<"$chatgpt_attachment_help"
 grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 chatgpt_research_export_help="$("$binary" workflow agent chatgpt conversations export-research --help)"

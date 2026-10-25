@@ -105,6 +105,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "observed_at", Type: "datetime", Required: true, Description: "UTC timestamp after the settings tab was reloaded and read."},
 				{Name: "source", Type: "string", Required: true, Description: "visible_chatgpt_settings_plan_limits_weekly_row."},
 				{Name: "source_url", Type: "string", Required: true, Description: "Settings / Usage overview URL."},
+				{Name: "target_id", Type: "string", Required: true, Description: "Exact reused or newly opened Settings tab target ID; tab is retained."},
+				{Name: "target_created", Type: "boolean", Required: true, Description: "True if this command opened the persistent Settings tab; false if it reused one."},
 				{Name: "guard", Type: "quota_guard", Required: false, Description: "Opt-in private per-session before/after reset stop decision and reset evidence."},
 			},
 		},

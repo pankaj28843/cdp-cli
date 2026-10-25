@@ -494,8 +494,8 @@ Capability metadata does not attach to Chrome. Provider doctor/auth/ask/CRUD
 commands are added only after their concrete installed browser workflows pass
 the corresponding safety and usefulness gates.
 
-To read the current weekly **subscription plan** allowance from an existing
-ChatGPT Settings → Usage tab:
+To read the current weekly **subscription plan** allowance from ChatGPT
+Settings → Usage:
 
 ```bash
 cdp --browser-mode headed workflow agent chatgpt quota --json
@@ -506,8 +506,12 @@ cdp --browser-mode headed workflow agent chatgpt quota \
 cdp schema chatgpt-plan-quota --json
 ```
 
-The command reloads that existing tab, reads its visible Plan limits row, and
-leaves the tab open. The allowance is shared across Codex, Work, Workspace
+The command reuses a matching tab, or opens one if none exists. It reloads the
+tab, reads its visible Plan limits row, and leaves it open even if the reading
+fails. The result includes `target_id` and `target_created`; an explicit
+`--target` must name an existing Settings tab and is never replaced. If multiple
+Settings tabs are open, the command reuses the one with the lowest target ID.
+The allowance is shared across Codex, Work, Workspace
 Agents, and ChatGPT for Excel; the page excludes chat conversations. It is
 not an API quota. JSON reports a numeric `remaining_percent`, the raw
 `reset_display`, UTC `observed_at`, and source. The Settings page currently
