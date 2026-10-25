@@ -2,13 +2,38 @@ package chatgpt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/testsupport"
 )
+
+func TestAckIdentityProbeIgnoresHiddenDuplicateUserBubble(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for JavaScript observation validation")
+	}
+	script := `global.location = {pathname:'/c/synthetic-conversation'};
+const hidden = {innerText:'Stale hidden prompt', offsetWidth:0, offsetHeight:0, getClientRects:()=>[]};
+const visible = {innerText:'Exact submitted prompt', offsetWidth:1, offsetHeight:1, getClientRects:()=>[1]};
+global.document = {querySelectorAll:()=>[hidden, visible]};
+console.log(JSON.stringify(` + ackIdentityProbeExpression + `));`
+	out, err := exec.Command(node, "-e", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("probe expression: %v %s", err, out)
+	}
+	var observed renderedObservation
+	if err := json.Unmarshal(out, &observed); err != nil {
+		t.Fatal(err)
+	}
+	if !validAckIdentity(observed, fingerprintPrompt("Exact submitted prompt")) {
+		t.Fatalf("visible submitted turn not proved: %+v", observed)
+	}
+}
 
 type stalledAckClient struct{ *testsupport.Browser }
 

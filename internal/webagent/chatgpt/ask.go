@@ -2109,7 +2109,7 @@ func observeRendered(
       shell.querySelectorAll('[data-chatgpt-search-message-ids]').length === 1 &&
       shell.querySelectorAll('[data-chatgpt-search-message-ids] [data-testid="generated-image-gallery"]').length === 1 ? shell : heading;
   }).filter(Boolean));
-  const users = unique(Array.from(document.querySelectorAll('[data-user-message-bubble]')));
+  const users = unique(Array.from(document.querySelectorAll('[data-user-message-bubble]'))).filter(visible);
 	  // Read only the latest assistant turn. An older completed image must not
 	  // become completion evidence for a new image-pending continuation.
 	  const assistantTurn = assistants.length ?

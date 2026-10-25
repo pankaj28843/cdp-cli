@@ -31,7 +31,9 @@ func classifyAckObservationError(err error) string {
 // submitted prompt fingerprint on the same owned target.
 const ackIdentityProbeExpression = `(() => {
   const match = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
-  const users = [...document.querySelectorAll('[data-user-message-bubble]')];
+  const users = [...document.querySelectorAll('[data-user-message-bubble]')].filter(
+    element => element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length)
+  );
   const user = users.at(-1);
   const text = user && (user.innerText || user.textContent) || '';
   return {

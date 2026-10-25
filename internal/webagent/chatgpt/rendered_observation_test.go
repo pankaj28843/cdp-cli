@@ -33,10 +33,10 @@ global.HTMLElement = class {
  constructor(text = '') {
   this.innerText = this.textContent = text;
   this.childNodes = [{nodeType: 3, nodeValue: text}];
-  this.dataset = {}; this.tagName = 'DIV'; this.offsetWidth = 1;
+  this.dataset = {}; this.tagName = 'DIV'; this.offsetWidth = 1; this.hidden = false;
  }
  getAttribute() { return null; }
- getClientRects() { return [1]; }
+ getClientRects() { return this.hidden ? [] : [1]; }
  matches() { return false; }
  querySelector() { return null; }
  querySelectorAll() { return []; }
@@ -45,6 +45,8 @@ global.HTMLElement = class {
 };
 global.location = {origin:'https://chatgpt.com',pathname: '/c/synthetic-conversation'};
 const prompt = new HTMLElement('Exact synthetic prompt.');
+const hiddenPrompt = new HTMLElement('Unrelated hidden copy.');
+hiddenPrompt.hidden = true; hiddenPrompt.offsetWidth = 0;
 const answer = new HTMLElement('READY');
 const copy = new HTMLElement();
 copy.followsAssistant = true;
@@ -59,7 +61,7 @@ let modern = true;
 global.document = {querySelectorAll(selector) {
  if (modern) {
   if (selector === '[data-conversation-role="assistant"]') return [heading, heading];
-  if (selector === '[data-user-message-bubble]') return [prompt, prompt];
+  if (selector === '[data-user-message-bubble]') return [hiddenPrompt, prompt, prompt];
  } else {
   if (selector === '[data-message-author-role="assistant"]') return [unit];
   if (selector === '[data-message-author-role="user"]') return [prompt];
