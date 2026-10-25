@@ -9,53 +9,8 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 )
-
-const quotaFixtureScope = "Plan limits\nShared across Codex, Work, Workspace Agents, and ChatGPT for Excel. Chat conversations are not included.\nWeekly limit\nResets in 5d 13h\n19% left"
-
-func fixtureQuotaReading(row string) quotaPageReading {
-	return quotaPageReading{
-		URL: chatgptQuotaURL, SectionCount: 1, RowCount: 1,
-		SectionText: quotaFixtureScope, RowText: row, TimeOriginMS: 1234,
-	}
-}
-
-func TestParseQuotaReadingPreservesRelativeResetAndScope(t *testing.T) {
-	now := time.Date(2026, 10, 25, 5, 40, 0, 0, time.UTC)
-	snapshot, resetIn, err := parseQuotaReading(fixtureQuotaReading("Weekly limit\nResets in 5d 13h\n19% left"), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !snapshot.OK || snapshot.RemainingPercent != 19 || snapshot.RemainingUnit != "percent" ||
-		snapshot.QuotaScope != chatgptQuotaScope || snapshot.ResetDisplay != "Resets in 5d 13h" ||
-		snapshot.ResetAt != nil || snapshot.ResetTimezone != nil || resetIn != 5*24*time.Hour+13*time.Hour {
-		t.Fatalf("unexpected parsed snapshot: %+v, resetIn=%v", snapshot, resetIn)
-	}
-	for _, reading := range []quotaPageReading{
-		func() quotaPageReading {
-			r := fixtureQuotaReading("Weekly limit\nResets in 5d 13h\n19% left")
-			r.RowCount = 2
-			return r
-		}(),
-		func() quotaPageReading {
-			r := fixtureQuotaReading("Weekly limit\nResets in 5d 13h\n19% left")
-			r.SectionText = "Plan limits\nChat conversations\nWeekly limit"
-			return r
-		}(),
-		fixtureQuotaReading("Weekly limit\nResets tomorrow\n19% left"),
-		fixtureQuotaReading("Weekly limit\nResets in 5d 13h\n119% left"),
-		fixtureQuotaReading("Weekly limit\nResets in 5d 13h\n19 credits left"),
-		func() quotaPageReading {
-			r := fixtureQuotaReading("Weekly limit\nResets in 5d 13h\n19% left")
-			r.URL = "https://evil.example/settings/usage"
-			return r
-		}(),
-	} {
-		if _, _, err := parseQuotaReading(reading, now); err == nil {
-			t.Fatalf("ambiguous or changed reading was accepted: %+v", reading)
-		}
-	}
-}
 
 func TestQuotaGuardBaselineResetAndStopBoundaries(t *testing.T) {
 	start := time.Date(2026, 10, 25, 5, 40, 0, 0, time.UTC)
@@ -146,58 +101,54 @@ func TestQuotaGuardAmbiguousResetFailsClosedAndStateIsPrivate(t *testing.T) {
 	}
 }
 
-func TestQuotaTargetCreatesOncePersistsAndReuses(t *testing.T) {
-	ctx := context.Background()
-	fake := &keepOpenPolicyFakeClient{targets: map[string]cdp.TargetInfo{}, pendingClose: map[string]int{}}
-	a := newKeepOpenPolicyTestApp(t)
-	first, created, err := a.selectQuotaTarget(ctx, fake, "")
-	if err != nil || !created || first.TargetID == "" || first.URL != chatgptQuotaURL {
-		t.Fatalf("first selection: %+v created=%v err=%v", first, created, err)
-	}
-	if len(fake.targets) != 1 || len(fake.events) != 1 || fake.events[0] != "mark-persistent:"+first.TargetID {
-		t.Fatalf("created target not retained as persistent: targets=%+v events=%+v", fake.targets, fake.events)
-	}
-	second, created, err := a.selectQuotaTarget(ctx, fake, "")
-	if err != nil || created || second.TargetID != first.TargetID || len(fake.targets) != 1 {
-		t.Fatalf("repeat selection opened another tab: %+v created=%v err=%v", second, created, err)
-	}
-}
-
-func TestQuotaTargetExplicitFailureAndMultipleMatchReuse(t *testing.T) {
-	ctx := context.Background()
+func TestQuotaExplicitTargetValidationNeverCreatesTab(t *testing.T) {
 	fake := &keepOpenPolicyFakeClient{targets: map[string]cdp.TargetInfo{
+		"usage": {TargetID: "usage", Type: "page", URL: "https://chatgpt.com/settings/usage?tab=overview"},
 		"other": {TargetID: "other", Type: "page", URL: "https://example.test/"},
 	}, pendingClose: map[string]int{}}
 	a := newKeepOpenPolicyTestApp(t)
-	if _, _, err := a.selectQuotaTarget(ctx, fake, "missing"); err == nil {
-		t.Fatal("missing explicit target was replaced")
+	id, err := a.validateQuotaTarget(context.Background(), fake, "usage")
+	if err != nil || id != "usage" {
+		t.Fatalf("valid explicit target: %q %v", id, err)
 	}
-	if _, _, err := a.selectQuotaTarget(ctx, fake, "other"); err == nil {
-		t.Fatal("wrong explicit target was accepted")
+	for _, targetID := range []string{"other", "missing"} {
+		if _, err := a.validateQuotaTarget(context.Background(), fake, targetID); err == nil {
+			t.Fatalf("invalid explicit target %q was accepted", targetID)
+		}
 	}
-	if len(fake.targets) != 1 || len(fake.events) != 0 {
-		t.Fatalf("explicit failure mutated tabs: targets=%+v events=%+v", fake.targets, fake.events)
-	}
-	fake.targets["usage-a"] = cdp.TargetInfo{TargetID: "usage-a", Type: "page", URL: chatgptQuotaURL}
-	fake.targets["usage-b"] = cdp.TargetInfo{TargetID: "usage-b", Type: "page", URL: chatgptQuotaURL}
-	selected, created, err := a.selectQuotaTarget(ctx, fake, "")
-	if err != nil || created || selected.TargetID != "usage-a" {
-		t.Fatalf("multiple Settings tabs did not reuse stable first ID: %+v created=%v err=%v", selected, created, err)
-	}
-	if len(fake.targets) != 3 || len(fake.events) != 0 {
-		t.Fatalf("multiple-match selection mutated tabs: targets=%+v events=%+v", fake.targets, fake.events)
+	if len(fake.targets) != 2 || len(fake.events) != 0 {
+		t.Fatalf("target validation mutated tabs: targets=%+v events=%+v", fake.targets, fake.events)
 	}
 }
 
-func TestQuotaAuthenticationRedirectClassification(t *testing.T) {
-	for _, raw := range []string{"https://chatgpt.com/auth/login", "https://chatgpt.com/login", "https://auth.openai.com/authorize"} {
-		if !quotaAuthURL(raw) {
-			t.Fatalf("login route was not classified: %s", raw)
-		}
+func TestQuotaCachePreservesObservationAndExpiresAtTwoMinutes(t *testing.T) {
+	observed := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	reset := observed.Add(6 * 24 * time.Hour)
+	zone := "UTC"
+	snapshot := quotaSnapshot{OK: true, SchemaVersion: chatgptQuotaSchemaVersion,
+		QuotaScope: chatgptQuotaScope, RemainingPercent: 95, RemainingUnit: "percent",
+		ResetAt: &reset, ResetTimezone: &zone, ObservedAt: observed,
+		Source: "direct_chatgpt_usage_api_weekly_window", SourceURL: chatgpt.Origin + chatgpt.UsagePath}
+	path := quotaCachePath(t.TempDir())
+	if err := saveQuotaCache(path, "synthetic-account-scope", snapshot, 6*24*time.Hour); err != nil {
+		t.Fatal(err)
 	}
-	for _, raw := range []string{chatgptQuotaURL, "https://example.test/login", "http://auth.openai.com/authorize"} {
-		if quotaAuthURL(raw) {
-			t.Fatalf("non-login route was classified: %s", raw)
-		}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("owner-only quota cache: %v %v", info, err)
+	}
+	cached, resetIn, hit := loadQuotaCache(path, "synthetic-account-scope", observed.Add(119*time.Second))
+	if !hit || !cached.CacheHit || cached.CacheAgeMS != 119000 || !cached.ObservedAt.Equal(observed) || resetIn != 6*24*time.Hour {
+		t.Fatalf("cache changed source observation: %+v reset=%v hit=%v", cached, resetIn, hit)
+	}
+	if _, _, hit := loadQuotaCache(path, "synthetic-account-scope", observed.Add(120*time.Second)); hit {
+		t.Fatal("two-minute-old reading was served")
+	}
+	if _, _, hit := loadQuotaCache(path, "different-account-scope", observed.Add(time.Second)); hit {
+		t.Fatal("other auth scope reused quota")
+	}
+	if !cachedQuotaBehindGuard(cached, &quotaGuardState{ObservedAt: observed.Add(time.Second)}) ||
+		cachedQuotaBehindGuard(cached, &quotaGuardState{ObservedAt: observed}) {
+		t.Fatal("cache did not respect newer guard observation")
 	}
 }

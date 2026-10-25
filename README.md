@@ -494,11 +494,12 @@ Capability metadata does not attach to Chrome. Provider doctor/auth/ask/CRUD
 commands are added only after their concrete installed browser workflows pass
 the corresponding safety and usefulness gates.
 
-To read the current weekly **subscription plan** allowance from ChatGPT
-Settings → Usage:
+To read the current weekly **subscription plan** allowance through the
+authenticated ChatGPT Usage API:
 
 ```bash
 cdp --browser-mode headed workflow agent chatgpt quota --json
+cdp --browser-mode headed workflow agent chatgpt quota --refresh --json
 cdp --browser-mode headed workflow agent chatgpt quota \
   --guard-state ~/.local/state/cdp-cli/my-session-quota.json \
   --establish-before-reset-baseline \
@@ -506,17 +507,16 @@ cdp --browser-mode headed workflow agent chatgpt quota \
 cdp schema chatgpt-plan-quota --json
 ```
 
-The command reuses a matching tab, or opens one if none exists. It reloads the
-tab, reads its visible Plan limits row, and leaves it open even if the reading
-fails. The result includes `target_id` and `target_created`; an explicit
-`--target` must name an existing Settings tab and is never replaced. If multiple
-Settings tabs are open, the command reuses the one with the lowest target ID.
-The allowance is shared across Codex, Work, Workspace
-Agents, and ChatGPT for Excel; the page excludes chat conversations. It is
-not an API quota. JSON reports a numeric `remaining_percent`, the raw
-`reset_display`, UTC `observed_at`, and source. The Settings page currently
-shows only a rounded relative reset countdown, so `reset_at` and
-`reset_timezone` are null. A changed or ambiguous page fails closed.
+The command uses an existing owner-only, browser-captured ChatGPT read-auth
+template for a direct GET. Normal reads do not open or reload a browser tab.
+Successful results are cached privately for less than two minutes; `--refresh`
+requires a new provider response. JSON identifies cache hits and their age,
+preserves the original `observed_at`, and reports the provider's absolute UTC
+`reset_at` (Unix seconds on the wire). `reset_display` is derived from the
+provider countdown. A stale or rejected auth template fails with a typed error;
+run `cdp --browser-mode headed workflow agent chatgpt auth refresh --json` to
+refresh it explicitly. The allowance is shared across Codex, Work, Workspace
+Agents, and ChatGPT for Excel; chat conversations and API quota are excluded.
 
 `--guard-state` opts into a private session policy; without it, quota is a
 read-only snapshot. The first guarded reading requires the explicit
