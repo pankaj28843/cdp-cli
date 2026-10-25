@@ -109,6 +109,7 @@ func (a *app) newWorkflowAgentProviderCommand(provider webagent.Provider) *cobra
 		cmd.AddCommand(a.newWorkflowAgentAlexAskCommand())
 	}
 	if provider == webagent.ProviderChatGPT {
+		cmd.AddCommand(a.newWorkflowAgentChatGPTQuotaCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTDoctorCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTAuthCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTTranscribeCommand())

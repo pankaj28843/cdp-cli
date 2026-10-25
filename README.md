@@ -494,6 +494,37 @@ Capability metadata does not attach to Chrome. Provider doctor/auth/ask/CRUD
 commands are added only after their concrete installed browser workflows pass
 the corresponding safety and usefulness gates.
 
+To read the current weekly **subscription plan** allowance from an existing
+ChatGPT Settings → Usage tab:
+
+```bash
+cdp --browser-mode headed workflow agent chatgpt quota --json
+cdp --browser-mode headed workflow agent chatgpt quota \
+  --guard-state ~/.local/state/cdp-cli/my-session-quota.json \
+  --establish-before-reset-baseline \
+  --before-reset-stop-at 1 --after-reset-stop-at 90 --json
+cdp schema chatgpt-plan-quota --json
+```
+
+The command reloads that existing tab, reads its visible Plan limits row, and
+leaves the tab open. The allowance is shared across Codex, Work, Workspace
+Agents, and ChatGPT for Excel; the page excludes chat conversations. It is
+not an API quota. JSON reports a numeric `remaining_percent`, the raw
+`reset_display`, UTC `observed_at`, and source. The Settings page currently
+shows only a rounded relative reset countdown, so `reset_at` and
+`reset_timezone` are null. A changed or ambiguous page fails closed.
+
+`--guard-state` opts into a private session policy; without it, quota is a
+read-only snapshot. The first guarded reading requires the explicit
+`--establish-before-reset-baseline` flag; omit it when no baseline exists and
+the command fails closed. Later readings infer a reset only when the countdown
+jumps forward and the percentage increases; ambiguous evidence stops the guard.
+The example stops at or below 1% before reset and at or below 90% after reset.
+The state file is written with owner-only permissions. Choose a path outside
+the repository, assign one writer to that state path, check it before each
+costly batch, and do not treat the guard as an automatic gate on other `cdp`
+commands.
+
 Auth refresh treats missing browser evidence as uncertainty, not proof of
 logout. Each supported provider gets one initial-load observation, one ordinary
 reload observation, and one final cache-bypassing hard-reload observation
