@@ -51,7 +51,11 @@ e2e-demo: build
 
 install: build
 	install -d "$(DESTDIR)$(PREFIX)/bin"
-	install -m 0755 "$(BINARY)" "$(DESTDIR)$(PREFIX)/bin/cdp"
+	@set -eu; \
+	  staged_binary="$$(mktemp "$(DESTDIR)$(PREFIX)/bin/.cdp-install.XXXXXX")"; \
+	  trap 'rm -f "$$staged_binary"' EXIT HUP INT TERM; \
+	  install -m 0755 "$(BINARY)" "$$staged_binary"; \
+	  mv -f "$$staged_binary" "$(DESTDIR)$(PREFIX)/bin/cdp"
 	install -d "$(DESTDIR)$(PREFIX)/share/cdp-cli"
 	install -m 0644 "$(GUIDE)" "$(DESTDIR)$(PREFIX)/share/cdp-cli/guide.md"
 	@printf 'Installed %s\nServices and scheduled jobs are unchanged.\n' "$(DESTDIR)$(PREFIX)/bin/cdp"
