@@ -165,7 +165,8 @@ func runOwned(
 }
 
 func ownedTargetSafeToClose(record browserflow.Record, result webagent.Result) bool {
-	if result.Error != nil && result.Error.Code == "chatgpt_restored_draft_detected" {
+	if result.Error != nil && (result.Error.Code == "chatgpt_restored_draft_detected" ||
+		result.Error.Code == "chatgpt_owned_draft_cleanup_unproved") {
 		return false
 	}
 	// Fingerprints are persisted before any owned prompt or upload preparation.

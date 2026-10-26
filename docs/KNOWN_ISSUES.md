@@ -33,6 +33,44 @@ proof that the visible minimum and requested numeric target were observed
 before the single Send boundary. A renamed label alone must not make a prior
 selection proof pass.
 
+## ChatGPT image-turn identity and concurrent drafts
+
+A Create Image ask with ten retained uploads reached one raw Send and a stable
+conversation route, but the rendered page exposed two separate
+`[data-user-message-bubble]` nodes for the same prompt. The one-user-node
+acknowledgement guard returned `chatgpt_submission_identity_unproven` with
+`retry_safe:false`; read-only detail of the exact conversation later confirmed
+the prompt fingerprint and a completed generated image. Neither node had a
+shared turn ID or unique ancestor, and detail exposed no structured user-turn
+count. Preserve the ambiguous result and recover the original conversation;
+never resubmit it. A future fix needs a provider-backed turn identity that
+distinguishes duplicate rendering from two actual user turns. Text equality
+alone is insufficient. Cover acknowledgement, rendered completion, and image
+pending gates with a synthetic two-node regression before changing them.
+
+In the same concurrent batch, another fresh ask refused a restored nonempty
+draft before Send, while a third failed target creation before Send. The global
+headed input lock serialized target creation and raw input, then released after
+dispatch so generation could overlap. That lock does not itself prove that
+provider draft state is isolated across fresh tabs. One later read-only probe
+proved a restored text draft's canonical SHA-256 matched a prior completed,
+closed ask receipt exactly. For that case only, a fresh ask may opt in with
+`--clear-owned-restored-draft-from PRIOR_RESULT.json`. The workflow checks the
+prior one-Send receipt and matching private journal, zero turns and attachments, the exact canonical draft
+fingerprint, native blanking, and a stable blank current composer before
+preparing new input. A mismatch or uncertain cleanup preserves the target and
+never sends. An earlier live attempt found that reloading after native
+blanking restored the same draft, so the opt-in route now stays in its exact
+fresh owned tab and relies on the normal exact new-prompt and attachment guards
+before one Send. A read-only storage check found no exact draft value in Web
+Storage or IndexedDB that could be safely removed; do not clear broad browser
+state.
+Keep the default pre-Send refusal for every unproved draft.
+The opt-in also accepts an identity-unproved prior ask with exactly one journaled
+raw Send and pending cleanup; its answer may still be generating. This only
+proves ownership of the restored draft text. It does not resolve that prior
+conversation or permit resending its prompt.
+
 ## Perplexity route changes
 
 Perplexity can render a temporary post-send route before replacing it with the

@@ -109,6 +109,7 @@ func TestLiveExplicitModelSelectionNoSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	var attachment *attachmentExpectation
+	uploadCount := 0
 	if os.Getenv("CDP_CHATGPT_LIVE_PREPARED_NO_SEND") == "1" {
 		nonce := fmt.Sprintf("harness-owned-nosend-%d", time.Now().UnixNano())
 		ownedPrompt = nonce + "\n" + strings.Repeat("Synthetic prepared storyboard inspection only. Do not submit this draft.\n", 58)
@@ -120,6 +121,15 @@ func TestLiveExplicitModelSelectionNoSend(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if manifest := os.Getenv("CDP_CHATGPT_LIVE_PREPARED_FILE_LIST"); manifest != "" {
+			content, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(content, &files); err != nil || len(files) == 0 {
+				t.Fatalf("invalid prepared file list: %v", err)
+			}
+		}
 		uploads, err := resolveLocalUploads(AskConfig{FilePaths: files})
 		if err != nil {
 			t.Fatal(err)
@@ -128,9 +138,10 @@ func TestLiveExplicitModelSelectionNoSend(t *testing.T) {
 		if failure != nil {
 			t.Fatal(failure)
 		}
-		if len(receipts) != 4 {
-			t.Fatal("four upload receipts not proved")
+		if len(receipts) != len(files) {
+			t.Fatal("prepared upload receipts not proved")
 		}
+		uploadCount = len(receipts)
 		attachment = expected
 		if _, _, err := prepareVerifiedPromptWithExpectation(ctx, lease.Session(), ownedPrompt, "Pro", selection.expectation, "GPT-6", ToolCreateImage, attachment, defaultComposerTimeout, 250*time.Millisecond); err != nil {
 			t.Fatal(err)
@@ -145,7 +156,7 @@ func TestLiveExplicitModelSelectionNoSend(t *testing.T) {
 		if err := dispatcher.verifyBeforeSend(ctx, lease.Session()); err != nil {
 			t.Fatalf("actual prepared dispatcher prefix failed at %v: %v", diagnostics["dispatch_guard_phase"], err)
 		}
-		t.Log("actual dispatcher prefix passed with exact nonce prompt, four confirmed uploads, GPT-6 / maximum Pro / Create image; NO Enter or Send; own nonce cleanup and exact close required")
+		t.Logf("actual dispatcher prefix passed with exact nonce prompt, %d confirmed uploads, GPT-6 / maximum Pro / Create image; NO Enter or Send; own nonce cleanup and exact close required", uploadCount)
 		return
 	}
 	if err := observeSelectionGuardAtSendWithExpectation(ctx, lease.Session(), selection.expectation, "GPT-6"); err != nil {

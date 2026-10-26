@@ -2,10 +2,13 @@ package chatgpt
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,9 @@ const (
 	attachmentAssignmentNotAttempted = "not_attempted"
 	attachmentAssignmentConfirmed    = "confirmed"
 	attachmentAssignmentUnknown      = "unknown"
+	maxBrowserUploadFileBytes        = 16 << 20
+	maxBrowserUploadBatchBytes       = 32 << 20
+	maxBrowserUploadFiles            = 20
 )
 
 type localUpload struct {
@@ -106,6 +112,9 @@ func resolveLocalUpload(rawPath string) (*localUpload, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("ChatGPT attachment must be a regular file")
 	}
+	if info.Size() > maxBrowserUploadFileBytes {
+		return nil, fmt.Errorf("ChatGPT attachment exceeds the 16 MiB browser transfer limit")
+	}
 	fingerprint, err := fingerprintLocalFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("ChatGPT attachment is not readable: %w", err)
@@ -124,6 +133,10 @@ func resolveLocalUploads(config AskConfig) ([]localUpload, error) {
 	paths := config.FilePaths
 	uploads := make([]localUpload, 0, len(paths))
 	names := make(map[string]bool, len(paths))
+	if len(paths) > maxBrowserUploadFiles {
+		return nil, fmt.Errorf("ChatGPT attachment batch exceeds 20 files")
+	}
+	var total int64
 	for _, path := range paths {
 		upload, err := resolveLocalUpload(path)
 		if err != nil {
@@ -137,6 +150,10 @@ func resolveLocalUploads(config AskConfig) ([]localUpload, error) {
 			return nil, fmt.Errorf("ChatGPT attachment filenames must be distinct")
 		}
 		names[key] = true
+		total += upload.Size
+		if total > maxBrowserUploadBatchBytes {
+			return nil, fmt.Errorf("ChatGPT attachment batch exceeds the 32 MiB browser transfer limit")
+		}
 		uploads = append(uploads, *upload)
 	}
 	return uploads, nil
@@ -150,14 +167,13 @@ func attachLocalFilesOnce(
 	poll time.Duration,
 ) ([]AttachmentData, *attachmentExpectation, *attachmentFailure) {
 	data := make([]AttachmentData, len(uploads))
-	paths := make([]string, len(uploads))
 	names := make([]string, len(uploads))
 	if len(uploads) == 0 {
 		return data, nil, nil
 	}
 	for i, upload := range uploads {
-		data[i] = AttachmentData{Name: upload.Name, Size: upload.Size, Transport: "headed_cdp_file_input", AssignmentOutcome: attachmentAssignmentNotAttempted}
-		paths[i], names[i] = upload.Path, upload.Name
+		data[i] = AttachmentData{Name: upload.Name, Size: upload.Size, Transport: "headed_cdp_browser_file", AssignmentOutcome: attachmentAssignmentNotAttempted}
+		names[i] = upload.Name
 	}
 	for _, upload := range uploads {
 		if err := validateLocalUploadUnchanged(upload); err != nil {
@@ -177,11 +193,10 @@ func attachLocalFilesOnce(
 		}
 	}
 
-	attempted, err := setFileInputFilesOnce(
+	attempted, err := assignBrowserFilesOnce(
 		ctx,
 		session,
-		chatGPTFileInputSelector,
-		paths...,
+		uploads,
 	)
 	if attempted {
 		for i := range data {
@@ -343,92 +358,116 @@ func verifyAttachmentPreflight(ctx context.Context, session *cdp.PageSession) (a
 	return preflight, nil
 }
 
-func setFileInputFilesOnce(
-	ctx context.Context,
-	session *cdp.PageSession,
-	selector string,
-	paths ...string,
-) (bool, error) {
-	if session == nil {
-		return false, fmt.Errorf("ChatGPT attachment session is unavailable")
+// DOM.setFileInputFiles passes host paths to Chrome. Headed Chrome can run in
+// another mount namespace, where those paths exist only as empty uploads. Move
+// bytes through the selected page's CDP session and dispatch one change event.
+func assignBrowserFilesOnce(ctx context.Context, session *cdp.PageSession, uploads []localUpload) (bool, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return false, err
 	}
-	var document struct {
-		Root struct {
-			NodeID int `json:"nodeId"`
-		} `json:"root"`
+	key, _ := json.Marshal(fmt.Sprintf("__cdp_upload_%x", nonce))
+	var result struct {
+		OK bool `json:"ok"`
 	}
-	if err := execPageSessionJSON(
-		ctx,
-		session,
-		"DOM.getDocument",
-		map[string]any{"depth": 0, "pierce": true},
-		&document,
-	); err != nil {
-		return false, fmt.Errorf("inspect ChatGPT attachment DOM: %w", err)
+	if err := evaluateInto(ctx, session, fmt.Sprintf(`(() => { Object.defineProperty(window, %s, {value:{parts:[],files:[]}, configurable:true}); return {ok:true}; })()`, key), &result); err != nil || !result.OK {
+		return false, browserUploadError("prepare browser-local ChatGPT files", err)
 	}
-	if document.Root.NodeID == 0 {
-		return false, fmt.Errorf("ChatGPT attachment DOM root is unavailable")
+	defer func() {
+		var ignored any
+		_ = evaluateInto(ctx, session, fmt.Sprintf(`(() => { delete window[%s]; return true; })()`, key), &ignored)
+	}()
+
+	for _, upload := range uploads {
+		file, err := os.Open(upload.Path)
+		if err != nil {
+			return false, err
+		}
+		opened, err := file.Stat()
+		if err != nil || !os.SameFile(upload.Info, opened) {
+			_ = file.Close()
+			return false, fmt.Errorf("ChatGPT attachment identity changed before browser transfer")
+		}
+		buffer := make([]byte, 12*1024)
+		var sent int64
+		streamHash := sha256.New()
+		for {
+			n, readErr := file.Read(buffer)
+			if n > 0 {
+				_, _ = streamHash.Write(buffer[:n])
+				chunk, _ := json.Marshal(base64.StdEncoding.EncodeToString(buffer[:n]))
+				var received struct {
+					Bytes int `json:"bytes"`
+				}
+				expression := fmt.Sprintf(`(() => { const state=window[%s]; if (!state) return {bytes:-1}; const raw=atob(%s); const bytes=Uint8Array.from(raw, c => c.charCodeAt(0)); state.parts.push(bytes); return {bytes:bytes.length}; })()`, key, chunk)
+				if err := evaluateInto(ctx, session, expression, &received); err != nil || received.Bytes != n {
+					_ = file.Close()
+					return false, browserUploadError("copy browser-local ChatGPT file chunk", err)
+				}
+				sent += int64(n)
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				_ = file.Close()
+				return false, readErr
+			}
+		}
+		if err := file.Close(); err != nil {
+			return false, err
+		}
+		if sent != upload.Size {
+			return false, fmt.Errorf("ChatGPT file size changed while copying")
+		}
+		var streamed [sha256.Size]byte
+		copy(streamed[:], streamHash.Sum(nil))
+		if streamed != upload.Fingerprint {
+			return false, fmt.Errorf("ChatGPT file content changed while copying")
+		}
+		if err := validateLocalUploadUnchanged(upload); err != nil {
+			return false, err
+		}
+		name, _ := json.Marshal(upload.Name)
+		kind, _ := json.Marshal(mime.TypeByExtension(filepath.Ext(upload.Name)))
+		var finished struct {
+			Size int64 `json:"size"`
+		}
+		expression := fmt.Sprintf(`(() => { const state=window[%s]; if (!state) return {size:-1}; const file=new File(state.parts,%s,{type:%s}); state.files.push(file); state.parts=[]; return {size:file.size}; })()`, key, name, kind)
+		if err := evaluateInto(ctx, session, expression, &finished); err != nil || finished.Size != upload.Size {
+			return false, browserUploadError("finish browser-local ChatGPT file", err)
+		}
 	}
-	var query struct {
-		NodeID int `json:"nodeId"`
-	}
-	if err := execPageSessionJSON(
-		ctx,
-		session,
-		"DOM.querySelector",
-		map[string]any{
-			"nodeId":   document.Root.NodeID,
-			"selector": selector,
-		},
-		&query,
-	); err != nil {
-		return false, fmt.Errorf("query ChatGPT exact file input: %w", err)
-	}
-	if query.NodeID == 0 {
-		return false, fmt.Errorf("ChatGPT exact file input was not found")
-	}
-	var described struct {
-		Node struct {
-			NodeName   string   `json:"nodeName"`
-			Attributes []string `json:"attributes"`
-		} `json:"node"`
-	}
-	if err := execPageSessionJSON(
-		ctx,
-		session,
-		"DOM.describeNode",
-		map[string]any{"nodeId": query.NodeID, "depth": 0},
-		&described,
-	); err != nil {
-		return false, fmt.Errorf("describe ChatGPT exact file input: %w", err)
-	}
-	if !strings.EqualFold(described.Node.NodeName, "input") ||
-		!attributeEquals(described.Node.Attributes, "type", "file") {
-		return false, fmt.Errorf("ChatGPT exact attachment node is not input[type=file]")
-	}
-	if err := execPageSessionJSON(
-		ctx,
-		session,
-		"DOM.setFileInputFiles",
-		map[string]any{
-			"nodeId": query.NodeID,
-			"files":  paths,
-		},
-		nil,
-	); err != nil {
-		return true, fmt.Errorf("assign ChatGPT file input: %w", err)
+
+	// A transport error here is ambiguous: the change event may have reached the
+	// provider. The caller must never assign or submit this request again.
+	result.OK = false
+	expression := fmt.Sprintf(`(() => {
+  const state=window[%s];
+  const inputs=Array.from(document.querySelectorAll('%s'));
+  const editors=Array.from(document.querySelectorAll('[contenteditable="true"][role="textbox"]')).filter(node=>node.isContentEditable);
+  const input=inputs.length===1?inputs[0]:null;
+  const form=input?.closest('form');
+  if (!state || !form || editors.length!==1 || !form.contains(editors[0]) ||
+      input.files.length!==0 || form.querySelectorAll('[data-composer-attachments] button[aria-label^="Remove "]').length!==0 ||
+      state.files.length!==%d) return {ok:false};
+  const transfer=new DataTransfer();
+  for (const file of state.files) transfer.items.add(file);
+  input.files=transfer.files;
+  input.dispatchEvent(new Event('change',{bubbles:true}));
+  return {ok:true};
+})()`, key, chatGPTFileInputSelector, len(uploads))
+	if err := evaluateInto(ctx, session, expression, &result); err != nil || !result.OK {
+		return true, browserUploadError("assign browser-local ChatGPT files", err)
 	}
 	return true, nil
 }
 
-func attributeEquals(attributes []string, name string, expected string) bool {
-	for index := 0; index+1 < len(attributes); index += 2 {
-		if strings.EqualFold(attributes[index], name) &&
-			strings.EqualFold(attributes[index+1], expected) {
-			return true
-		}
+func browserUploadError(stage string, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s: %w", stage, err)
 	}
-	return false
+	return fmt.Errorf("%s: provider rejected the expected state", stage)
 }
 
 func observeAttachment(

@@ -219,3 +219,24 @@ func ClickPoint(
 	}
 	return DispatchOutcome{Dispatch: DispatchPerformed, RawInputAttempted: true}, nil
 }
+
+// ClearFocusedComposer selects and deletes text in an owned, already focused
+// composer. The caller must prove ownership before calling and observe a stable
+// blank editor afterward. Any transport failure may have changed the draft.
+func ClearFocusedComposer(ctx context.Context, session *cdp.PageSession) error {
+	if session == nil {
+		return fmt.Errorf("page session is required")
+	}
+	for _, params := range []map[string]any{
+		{"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": 2, "windowsVirtualKeyCode": 65},
+		{"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": 2, "windowsVirtualKeyCode": 65},
+		{"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8},
+		{"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8},
+	} {
+		raw, _ := json.Marshal(params)
+		if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", raw); err != nil {
+			return fmt.Errorf("clear focused composer outcome is ambiguous: %w", err)
+		}
+	}
+	return nil
+}

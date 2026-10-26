@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,6 +63,19 @@ type batchAttachmentClient struct {
 
 func (c *batchAttachmentClient) CallSession(ctx context.Context, session, method string, params any, result any) error {
 	if method == "Runtime.evaluate" {
+		raw, _ := json.Marshal(params)
+		if strings.Contains(string(raw), "state.parts.push(bytes)") {
+			c.calls = append(c.calls, selectionActivationCall{method: method, params: raw})
+			return decodeSelectionActivationResult(result, map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"bytes": 17}}})
+		}
+		if strings.Contains(string(raw), "state.files.push(file)") {
+			c.calls = append(c.calls, selectionActivationCall{method: method, params: raw})
+			return decodeSelectionActivationResult(result, map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"size": 17}}})
+		}
+		if strings.Contains(string(raw), "input.dispatchEvent(new Event('change'") && c.assignmentError != nil {
+			c.calls = append(c.calls, selectionActivationCall{method: method, params: raw})
+			return c.assignmentError
+		}
 		return c.selectionActivationClient.CallSession(ctx, session, method, params, result)
 	}
 	raw, _ := json.Marshal(params)
@@ -103,19 +117,10 @@ func TestAttachmentBatchAssignedOnce(t *testing.T) {
 			data, expectation, failure := attachLocalFilesOnce(context.Background(), newSelectionActivationSession(t, client), uploads, time.Second, time.Millisecond)
 			assignments := 0
 			for _, call := range client.calls {
-				if call.method != "DOM.setFileInputFiles" {
+				if call.method != "Runtime.evaluate" || !strings.Contains(string(call.params), "input.dispatchEvent(new Event('change'") {
 					continue
 				}
 				assignments++
-				var value struct {
-					Files []string `json:"files"`
-				}
-				if err := json.Unmarshal(call.params, &value); err != nil {
-					t.Fatal(err)
-				}
-				if len(value.Files) != 3 {
-					t.Fatalf("assignment paths=%v", value.Files)
-				}
 			}
 			if assignments != 1 || len(data) != 3 {
 				t.Fatalf("assignments=%d data=%+v", assignments, data)
@@ -153,6 +158,29 @@ func TestResolveLocalUploadsRejectsAmbiguousNamesAndInvalidBatch(t *testing.T) {
 	uploads, err := resolveLocalUploads(AskConfig{FilePaths: []string{first}})
 	if err != nil || len(uploads) != 1 {
 		t.Fatalf("single file: uploads=%v error=%v", uploads, err)
+	}
+}
+
+func TestResolveLocalUploadsBoundsBrowserMemoryBeforeAssignment(t *testing.T) {
+	dir := t.TempDir()
+	oversized := filepath.Join(dir, "oversized.png")
+	file, err := os.Create(oversized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxBrowserUploadFileBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	if _, err := resolveLocalUploads(AskConfig{FilePaths: []string{oversized}}); err == nil || !strings.Contains(err.Error(), "16 MiB") {
+		t.Fatalf("oversized browser upload was accepted: %v", err)
+	}
+	paths := make([]string, maxBrowserUploadFiles+1)
+	for i := range paths {
+		paths[i] = filepath.Join(dir, fmt.Sprintf("fixture-%d.png", i))
+	}
+	if _, err := resolveLocalUploads(AskConfig{FilePaths: paths}); err == nil || !strings.Contains(err.Error(), "20 files") {
+		t.Fatalf("excessive browser upload count was accepted: %v", err)
 	}
 }
 

@@ -30,19 +30,20 @@ const (
 
 type AskConfig struct {
 	BrowserConfig
-	Store           *Store
-	FilePaths       []string
-	Tool            string
-	Timeout         time.Duration
-	ComposerTimeout time.Duration
-	PollInterval    time.Duration
-	Now             func() time.Time
-	Send            browserflow.Dispatcher
-	Selection       SelectionPolicy
-	operation       webagent.Operation
-	runID           string
-	holdInput       bool
-	completionHook  askCompletionHook
+	Store                 *Store
+	FilePaths             []string
+	OwnedDraftReceiptPath string
+	Tool                  string
+	Timeout               time.Duration
+	ComposerTimeout       time.Duration
+	PollInterval          time.Duration
+	Now                   func() time.Time
+	Send                  browserflow.Dispatcher
+	Selection             SelectionPolicy
+	operation             webagent.Operation
+	runID                 string
+	holdInput             bool
+	completionHook        askCompletionHook
 }
 
 type askCompletionHook func(
@@ -81,6 +82,7 @@ type AskData struct {
 type composerObservation struct {
 	DefaultChatSurface      bool    `json:"default_chat_surface"`
 	DocumentReadyState      string  `json:"document_ready_state"`
+	DocumentTimeOrigin      float64 `json:"document_time_origin"`
 	RouteReady              bool    `json:"route_ready"`
 	ConversationRouteReady  bool    `json:"conversation_route_ready"`
 	EditorReady             bool    `json:"editor_ready"`
@@ -93,7 +95,9 @@ type composerObservation struct {
 	InnerTextCharacters     int     `json:"inner_text_characters"`
 	TextContentCharacters   int     `json:"text_content_characters"`
 	CanonicalCharacters     int     `json:"canonical_characters"`
+	CanonicalText           string  `json:"canonical_text"`
 	DraftCharacters         int     `json:"draft_characters"`
+	AttachmentCount         int     `json:"attachment_count"`
 	ChatCount               int     `json:"chat_count"`
 	WorkCount               int     `json:"work_count"`
 	ChatSelected            bool    `json:"chat_selected"`
@@ -416,6 +420,18 @@ func Ask(
 		)
 	}
 	data.PromptFingerprint = fingerprintPrompt(prompt)
+	ownedDraftFingerprint := ""
+	if config.OwnedDraftReceiptPath != "" {
+		var err error
+		ownedDraftFingerprint, err = ownedDraftFingerprintFromReceipt(ctx, config.OwnedDraftReceiptPath, config.Journal)
+		if err != nil {
+			return askFailure(runID, config, webagent.StagePlanned, nil,
+				webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+				notPerformed, nil, "chatgpt_owned_draft_receipt_invalid", "usage",
+				"The prior owned draft receipt is not a completed, closed ChatGPT ask", "", data,
+				[]string{"Pass the exact prior terminal ChatGPT ask result."})
+		}
+	}
 	if config.Timeout <= 0 {
 		config.Timeout = defaultAskTimeout
 		if usesAnswerNowGate(tool) {
@@ -538,13 +554,49 @@ func Ask(
 			data.Metadata["composer_document_ready_state"] = composer.DocumentReadyState
 			if readiness.Observed && restoredComposerDraft(composer) {
 				data.Metadata["restored_draft_characters"] = composer.CanonicalCharacters
-				return askFailure(
-					runID, config, webagent.StageAttached, target, pending,
-					notPerformed, nil,
-					"chatgpt_restored_draft_detected", "provider",
-					"ChatGPT restored a nonempty draft on the fresh target; no prompt input or Send was attempted",
-					"", data, cleanupCommands(runID, pending),
-				)
+				if ownedDraftFingerprint == "" ||
+					fingerprintPrompt(composer.CanonicalText) != ownedDraftFingerprint ||
+					composer.AttachmentCount != 0 {
+					return askFailure(
+						runID, config, webagent.StageAttached, target, pending,
+						notPerformed, nil,
+						"chatgpt_restored_draft_detected", "provider",
+						"ChatGPT restored a nonempty draft on the fresh target; no prompt input or Send was attempted",
+						"", data, cleanupCommands(runID, pending),
+					)
+				}
+				cleanupPhase, err := clearExactOwnedRestoredDraft(ctx, config.Client, session, ownedDraftFingerprint)
+				data.Metadata["owned_draft_cleanup_phase"] = cleanupPhase
+				if err != nil {
+					if ownedDraftCleanupMayHaveMutated(cleanupPhase) {
+						// The new ask was never sent, but draft deletion may have occurred.
+						// Omit Send action evidence and forbid replay of this cleanup.
+						return askFailureWithoutActionRetry(runID, config, webagent.StageAttached, target, pending,
+							"chatgpt_owned_draft_cleanup_unproved", "provider",
+							"Exact owned draft cleanup or stable blank composer was not proved; no new prompt or Send was attempted",
+							"", data, cleanupCommands(runID, pending))
+					}
+					return askFailure(runID, config, webagent.StageAttached, target, pending,
+						notPerformed, nil, "chatgpt_owned_draft_cleanup_unproved", "provider",
+						"Exact owned draft cleanup or stable blank composer was not proved; no new prompt or Send was attempted",
+						"", data, cleanupCommands(runID, pending))
+				}
+				data.Metadata["owned_draft_cleared"] = true
+				if err := observeComposer(ctx, session, "", "", &composer); err != nil ||
+					!composer.RouteReady || composer.CanonicalCharacters != 0 ||
+					composer.UserMessageCount != 0 || composer.AssistantCount != 0 {
+					return askFailureWithoutActionRetry(runID, config, webagent.StageAttached, target, pending,
+						"chatgpt_owned_draft_cleanup_unproved", "provider",
+						"Blank composer after owned draft cleanup was not proved", "", data,
+						cleanupCommands(runID, pending))
+				}
+				if err := observeSelectionSurface(ctx, session, &surface); err != nil ||
+					!selectionSurfaceReady(surface, false) {
+					return askFailureWithoutActionRetry(runID, config, webagent.StageAttached, target, pending,
+						"chatgpt_owned_draft_cleanup_unproved", "provider",
+						"Selection surface after owned draft cleanup was not ready", "", data,
+						cleanupCommands(runID, pending))
+				}
 			}
 			if err != nil || readiness.ObservationFailed() {
 				data.Metadata["composer_observation_error_kind"] = composerObservationErrorKind(err, readiness.LastObservationError)
@@ -1464,8 +1516,15 @@ func observeComposerWithTool(
 	      return {ready: false, x: -1, y: -1};
 	    }
 	    const rect = element.getBoundingClientRect();
-	    const x = rect.left + rect.width / 2;
-	    const y = rect.top + rect.height / 2;
+	    const left = Math.max(0, rect.left);
+	    const right = Math.min(window.innerWidth, rect.right);
+	    const topEdge = Math.max(0, rect.top);
+	    const bottom = Math.min(window.innerHeight, rect.bottom);
+	    if (right <= left || bottom <= topEdge) {
+	      return {ready: false, x: -1, y: -1};
+	    }
+	    const x = left + (right - left) / 2;
+	    const y = topEdge + (bottom - topEdge) / 2;
 	    const top = document.elementFromPoint(x, y);
 	    return {
 	      ready: Boolean(top && (top === element || element.contains(top))),
@@ -1635,6 +1694,7 @@ func observeComposerWithTool(
 	  const expectedPrompt = expectedTool ? normalize(expected).replace(/^\s+|\s+$/g, '') : normalize(expected);
 	  return {
 	    document_ready_state: document.readyState,
+	    document_time_origin: performance.timeOrigin,
     default_chat_surface: chats.length === 0 && works.length === 0 &&
       Boolean(editor) && specialized.length === 0 &&
       location.origin === 'https://chatgpt.com' && location.pathname === '/' &&
@@ -1659,7 +1719,10 @@ func observeComposerWithTool(
 	    inner_text_characters: editorInnerText.length,
 	    text_content_characters: editorTextContent.length,
 	    canonical_characters: canonicalEditorText.length,
+	    canonical_text: canonicalEditorText,
 	    draft_characters: toolFreeEditorText.length,
+	    attachment_count: document.querySelectorAll('[data-composer-attachments] button[aria-label^="Remove "],[data-composer-attachments] img').length +
+	      Array.from(document.querySelectorAll('input[type="file"]')).reduce((count, input) => count + (input.files ? input.files.length : 0), 0),
 	    chat_count: chats.length,
 	    work_count: works.length,
 	    chat_selected: chats.length === 1 &&

@@ -405,6 +405,8 @@ grep -q -- '--provider gemini,grok' <<<"$aggregate_capabilities_help"
 "$binary" schema webagent-operation --json | jq -e '.ok == true and .schema.name == "webagent-operation" and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("evidence"))' >/dev/null
 "$binary" schema chatgpt-ask --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("input_attachments")) and (.schema.description | contains("one batch"))' >/dev/null
 "$binary" workflow agent chatgpt ask --help | grep -Fq -- '--file mobile.png --file desktop.png --file contract.md'
+"$binary" workflow agent chatgpt ask --help | grep -Fq -- '--clear-owned-restored-draft-from prior-result.json'
+"$binary" describe --command "workflow agent chatgpt ask" --json | jq -e '.commands.flags[] | select(.name == "clear-owned-restored-draft-from" and .type == "string")' >/dev/null
 "$binary" schema webagent-capabilities --json | jq -e '.ok == true and .schema.name == "webagent-capabilities" and (.schema.fields | map(.name) | index("operations"))' >/dev/null
 # Shared read cache is discoverable for every conversation provider; await stays fresh.
 for provider in chatgpt claude gemini grok perplexity tripadvisor; do

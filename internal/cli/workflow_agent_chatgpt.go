@@ -910,6 +910,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 	var model string
 	var tool string
 	var conversationID string
+	var ownedDraftReceiptPath string
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible ChatGPT request",
@@ -918,6 +919,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			"Use --conversation ID to continue an existing conversation with the same explicit tool and single-Send safeguards. Allow up to four minutes for composer hydration within a ten-minute default request budget; --timeout overrides the request budget.",
 		Example: "  printf '%s' 'I keep waking with the taste of salt in my mouth, and every morning there is one more wet footprint on the attic stairs. Write the opening scene of an original gothic story.' | cdp workflow agent chatgpt ask --stdin --thinking Medium --model 'GPT-5.6 Sol' --json\n" +
 			"  cdp workflow agent chatgpt ask 'Review both layouts against the contract.' --file mobile.png --file desktop.png --file contract.md --model current --thinking 'Extra High' --minimum-thinking 'Extra High' --json\n" +
+			"  cdp workflow agent chatgpt ask 'Start a new review.' --clear-owned-restored-draft-from prior-result.json --json\n" +
 			"  printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm. Paint the moment the keeper opens it.' | cdp workflow agent chatgpt ask --stdin --tool create-image --thinking Pro --model 'GPT-5.6 Sol' --json --timeout 40m",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -934,6 +936,9 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			defer cancel()
 			if conversationID != "" && len(filePaths) > 0 {
 				return commandError("chatgpt_continuation_attachments_unsupported", "usage", "--conversation does not support new --file uploads; use the existing conversation attachments", ExitUsage, nil)
+			}
+			if conversationID != "" && ownedDraftReceiptPath != "" {
+				return commandError("chatgpt_owned_draft_cleanup_fresh_only", "usage", "Owned restored draft cleanup requires a fresh ask", ExitUsage, nil)
 			}
 			if stdin && len(args) > 0 {
 				return commandError(
@@ -1022,12 +1027,13 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 				return a.renderWebAgentResult(ctx, human, result)
 			}
 			result := chatgpt.Ask(ctx, chatgpt.AskConfig{
-				BrowserConfig: browserConfig,
-				Store:         store,
-				FilePaths:     filePaths,
-				Tool:          tool,
-				Timeout:       timeout,
-				Selection:     selection,
+				BrowserConfig:         browserConfig,
+				Store:                 store,
+				FilePaths:             filePaths,
+				OwnedDraftReceiptPath: ownedDraftReceiptPath,
+				Tool:                  tool,
+				Timeout:               timeout,
+				Selection:             selection,
 			}, prompt)
 			human := fmt.Sprintf("chatgpt ask: %v", result.State)
 			if data, ok := result.Data.(chatgpt.AskData); ok && data.Text != "" {
@@ -1037,6 +1043,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&conversationID, "conversation", "", "continue this exact conversation ID in a fresh owned headed tab; supports --tool, not new --file uploads")
+	cmd.Flags().StringVar(&ownedDraftReceiptPath, "clear-owned-restored-draft-from", "", "opt in to clearing only a restored draft whose canonical SHA-256 matches a private-journal-proven prior one-Send ChatGPT ask receipt; refuse mismatches before input")
 	cmd.Flags().BoolVar(&stdin, "stdin", false, "read the exact prompt from stdin")
 	cmd.Flags().StringArrayVar(
 		&filePaths,

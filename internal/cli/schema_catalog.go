@@ -87,7 +87,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "text", Type: "string", Required: false, Description: "Assistant answer read from the exact owned conversation target."},
 				{Name: "input_attachments", Type: "array<chatgpt_input_attachment>", Required: false, Description: "Every submitted file with assignment_attempts, assignment_outcome, attachment_observed, processing_complete, and send_ready_after_upload. One batch assignment; ambiguous dispatch must never be repeated."},
 				{Name: "attachments", Type: "array<conversation_attachment>", Required: false, Description: "Provider-generated output attachments, distinct from submitted input files."},
-				{Name: "metadata", Type: "object", Required: false, Description: "Safe readiness stages, observation counters, exact prompt and model policy proof, and answer-readback evidence."},
+				{Name: "metadata", Type: "object", Required: false, Description: "Safe readiness stages, observation counters, exact prompt and model policy proof, and answer-readback evidence. Opt-in restored-draft cleanup adds owned_draft_cleanup_phase and owned_draft_cleared only after matching a private one-Send receipt and journal."},
 			},
 		},
 		"chatgpt-plan-quota": {
