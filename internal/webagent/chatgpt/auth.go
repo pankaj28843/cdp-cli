@@ -201,7 +201,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 				return authFailure(
 					runID, config, webagent.StagePrepared, target, pending,
 					"chatgpt_auth_observation_failed", "connection",
-					"ChatGPT conversation-read request observation failed on the exact headed target",
+					"ChatGPT authenticated backend read observation failed on the exact headed target",
 					data,
 				)
 			}
@@ -245,7 +245,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 				return authFailure(
 					runID, config, webagent.StageObserveTerminal, target, pending,
 					"chatgpt_read_request_not_observed", "auth",
-					"Signed-in ChatGPT conversation-read request evidence was not observed",
+					"Signed-in ChatGPT authenticated backend read was not observed",
 					data,
 				)
 			}

@@ -47,6 +47,30 @@ func TestAuthStatusHonorsBearerExpiry(t *testing.T) {
 	}
 }
 
+func TestAuthObserverAcceptsAuthenticatedBackendReadWithoutConversationHistory(t *testing.T) {
+	url := Origin + "/backend-api/accounts/check/v4-2023-04-27"
+	observer := authNetworkObserver{
+		records: map[string]*authRequestRecord{"read": {
+			Method: "GET", URL: url, ResponseURL: url, Status: 200,
+			Headers:      map[string]any{"Authorization": "Bearer synthetic"},
+			ExtraHeaders: map[string]any{"Cookie": "oai-client-auth-info=synthetic"},
+		}},
+		order: []string{"read"},
+	}
+	if _, ok := observer.selectRead(); !ok {
+		t.Fatal("authenticated backend GET was ignored when no conversation GET occurred")
+	}
+	observer.records["read"].Status = 401
+	if _, ok := observer.selectRead(); ok {
+		t.Fatal("rejected backend GET was accepted as auth evidence")
+	}
+	observer.records["read"].Status = 200
+	observer.records["read"].URL = Origin + "/api/unrelated"
+	if _, ok := observer.selectRead(); ok {
+		t.Fatal("non-backend GET was accepted as auth evidence")
+	}
+}
+
 func TestAuthStatusPreservesEvidenceLimitsWithoutTokenExpiry(t *testing.T) {
 	now := time.Date(2026, 9, 26, 18, 0, 0, 0, time.UTC)
 	for _, authorization := range []string{

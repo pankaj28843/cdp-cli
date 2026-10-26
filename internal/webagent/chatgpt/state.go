@@ -313,7 +313,7 @@ func (t RequestTemplate) Validate() error {
 		!isReadAuthPath(parsed.Path) ||
 		parsed.User != nil ||
 		parsed.Fragment != "" {
-		return fmt.Errorf("url must be an observed ChatGPT conversation-read endpoint")
+		return fmt.Errorf("url must be an observed ChatGPT backend read endpoint")
 	}
 	if len(t.Headers) == 0 || len(t.Headers) > 128 {
 		return fmt.Errorf("headers must contain between 1 and 128 entries")
@@ -322,7 +322,7 @@ func (t RequestTemplate) Validate() error {
 		return fmt.Errorf("headers must preserve the browser user-agent")
 	}
 	if strings.TrimSpace(t.Headers["authorization"]) == "" {
-		return fmt.Errorf("headers must preserve observed conversation-read authorization")
+		return fmt.Errorf("headers must preserve observed backend-read authorization")
 	}
 	for name, value := range t.Headers {
 		if err := validatePrivateValue("header name", name, 1024); err != nil {
@@ -420,17 +420,9 @@ func (r RuntimeCapabilities) Validate() error {
 }
 
 func isReadAuthPath(path string) bool {
-	if path == ConversationListPath || path == RoomsSummaryPath {
-		return true
-	}
-	const detailPrefix = "/backend-api/conversation/"
-	if !strings.HasPrefix(path, detailPrefix) {
-		return false
-	}
-	conversationID, err := url.PathUnescape(
-		strings.TrimPrefix(path, detailPrefix),
-	)
-	return err == nil && conversationIDPattern.MatchString(conversationID)
+	// The home page can load without a conversation read. Other successful
+	// authenticated backend GETs provide the same browser-observed credentials.
+	return strings.HasPrefix(path, "/backend-api/") && path != "/backend-api/"
 }
 
 func authStatusFromCapturedAt(
