@@ -708,6 +708,14 @@ rendered prompt fingerprint still matches. A performed dispatch with
 `raw_input_count=1` is never resent, including when stored-detail auth is
 expired and the terminal answer is returned from the rendered page.
 
+ChatGPT reads and transcription share one credential template from the selected
+signed-in Chrome session. `cdp --browser-mode headed workflow agent chatgpt auth
+refresh --json` captures the first successful authenticated GET matching
+`https://chatgpt.com/backend-api/*`, then saves the current session cookies.
+Refresh observes native traffic for one bounded window without reloading or
+requiring the composer to appear; UI readiness is diagnostic only. If no request
+matches, refresh leaves the previously saved template intact.
+
 ChatGPT conversation list/detail/await use captured-template direct HTTP first.
 Only an eligible auth/transport failure lazily initializes one headed fallback;
 429 and usage failures never do. That fallback proves the live

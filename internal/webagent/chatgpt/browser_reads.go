@@ -625,7 +625,6 @@ func prepareBrowserRead(
 		ctx,
 		config.Client,
 		session,
-		defaultObservationAttempts,
 		defaultObservationTimeout,
 	)
 	readEventError := err != nil

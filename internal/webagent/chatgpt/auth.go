@@ -17,19 +17,17 @@ import (
 )
 
 const (
-	AuthRefreshSchemaVersion   = "chatgpt-auth-refresh/v1"
-	DoctorSchemaVersion        = "chatgpt-doctor/v1"
-	defaultObservationTimeout  = 12 * time.Second
-	defaultAuthReadTimeout     = 45 * time.Second
-	defaultObservationAttempts = 3
+	AuthRefreshSchemaVersion  = "chatgpt-auth-refresh/v1"
+	DoctorSchemaVersion       = "chatgpt-doctor/v1"
+	defaultObservationTimeout = 12 * time.Second
+	defaultAuthReadTimeout    = 45 * time.Second
 )
 
 type AuthRefreshConfig struct {
 	BrowserConfig
-	Store               *Store
-	ObservationTimeout  time.Duration
-	ObservationAttempts int
-	Now                 func() time.Time
+	Store              *Store
+	ObservationTimeout time.Duration
+	Now                func() time.Time
 }
 
 type AuthRefreshData struct {
@@ -95,13 +93,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 	}
 	readTimeout := config.ObservationTimeout
 	if config.ObservationTimeout <= 0 {
-		config.ObservationTimeout = defaultObservationTimeout
-		// WaitForEvidence divides this total across three load stages. Leave
-		// each stage time for slow native reads before interrupting with reload.
 		readTimeout = defaultAuthReadTimeout
-	}
-	if config.ObservationAttempts < defaultObservationAttempts {
-		config.ObservationAttempts = defaultObservationAttempts
 	}
 	return runOwned(
 		ctx,
@@ -135,65 +127,13 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					data,
 				)
 			}
-			var cookies map[string]string
-			readiness, readinessErr := authreadiness.WaitForEvidence(
-				ctx,
-				session,
-				config.ObservationAttempts,
-				config.ObservationTimeout,
-				250*time.Millisecond,
-				func(observationCtx context.Context) (bool, error) {
-					observedCookies, cookieErr := readCookies(
-						observationCtx,
-						session,
-					)
-					if cookieErr != nil {
-						return false, cookieErr
-					}
-					data.CookieCount = len(observedCookies)
-					data.SessionCookieObserved =
-						hasSessionCookie(observedCookies)
-					signedIn, uiErr := observeSignedInUI(
-						observationCtx,
-						session,
-					)
-					if uiErr != nil {
-						return false, uiErr
-					}
-					data.SignedInUIObserved = signedIn
-					if !data.SessionCookieObserved ||
-						!data.SignedInUIObserved {
-						return false, nil
-					}
-					cookies = observedCookies
-					return true, nil
-				},
-			)
-			if readinessErr != nil || readiness.ObservationFailed() {
-				_ = lease.MarkIncomplete(context.Background())
-				return authFailure(
-					runID, config, webagent.StagePrepared, target, pending,
-					"chatgpt_auth_observation_failed", "connection",
-					"ChatGPT auth readiness could not complete its bounded load, reload, hard-reload, and grace-wait sequence",
-					data,
-				)
-			}
-			if !readiness.Observed {
-				_ = lease.MarkIncomplete(context.Background())
-				data.AuthState = "evidence_not_observed"
-				return authFailure(
-					runID, config, webagent.StageObserveTerminal, target, pending,
-					"chatgpt_auth_evidence_not_observed", "auth",
-					"ChatGPT auth evidence was not observed after initial load, reload, cache-bypassing hard reload, and final grace wait; the browser session may still be active",
-					data,
-				)
-			}
+			// Observe native authenticated traffic immediately. A slowly loading or
+			// changed composer must not prevent discovery or trigger early reloads.
 
 			observation, found, err := observeReadRequest(
 				ctx,
 				config.Client,
 				session,
-				config.ObservationAttempts,
 				readTimeout,
 			)
 			if err != nil {
@@ -214,7 +154,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			if found {
 				// Navigation and the observed read can rotate session cookies.
 				// Replay overlays this snapshot onto the literal captured header.
-				cookies, err = readCookies(ctx, session)
+				cookies, err := readCookies(ctx, session)
 				data.CookieCount = len(cookies)
 				data.SessionCookieObserved = hasSessionCookie(cookies)
 				if err != nil || !data.SessionCookieObserved {
@@ -226,6 +166,11 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 						data,
 					)
 				}
+				// UI evidence is diagnostic only; the authenticated response is the
+				// authority. Bound this optional probe independently of page hydration.
+				uiCtx, cancelUI := context.WithTimeout(ctx, time.Second)
+				data.SignedInUIObserved, _ = observeSignedInUI(uiCtx, session)
+				cancelUI()
 				observation.Headers["user-agent"] = userAgent
 				template = RequestTemplate{
 					SchemaVersion:    AuthTemplateSchemaVersion,
@@ -245,7 +190,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 				return authFailure(
 					runID, config, webagent.StageObserveTerminal, target, pending,
 					"chatgpt_read_request_not_observed", "auth",
-					"Signed-in ChatGPT authenticated backend read was not observed",
+					"No successful authenticated ChatGPT backend GET matched https://chatgpt.com/backend-api/*",
 					data,
 				)
 			}
@@ -383,11 +328,9 @@ func observeReadRequest(
 	ctx context.Context,
 	client EventClient,
 	session *cdp.PageSession,
-	attempts int,
 	wait time.Duration,
 ) (readObservation, bool, error) {
 	observer := authNetworkObserver{records: map[string]*authRequestRecord{}}
-	var selected readObservation
 	readEvent := client.ReadEvent
 	if scoped, ok := client.(interface {
 		ReadSessionEvent(context.Context, string) (cdp.Event, error)
@@ -396,53 +339,27 @@ func observeReadRequest(
 			return scoped.ReadSessionEvent(ctx, session.SessionID)
 		}
 	}
-	readiness, err := authreadiness.WaitForEvidence(
-		ctx,
-		session,
-		attempts,
-		wait,
-		time.Millisecond,
-		func(observationCtx context.Context) (bool, error) {
-			readCtx, cancelRead, sliceErr :=
-				authreadiness.SubObservationContext(
-					observationCtx,
-					250*time.Millisecond,
-				)
-			if sliceErr != nil {
-				return false, sliceErr
+	readCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		event, err := readEvent(readCtx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return readObservation{}, false, ctx.Err()
 			}
-			defer cancelRead()
-			// Drain each bounded slice without a readiness poll delay between
-			// network events; page-load bursts otherwise outpace observation.
-			for {
-				if readCtx.Err() != nil {
-					return false, nil
-				}
-				event, readErr := readEvent(readCtx)
-				if readErr != nil {
-					if readCtx.Err() != nil || errors.Is(readErr, context.DeadlineExceeded) {
-						return false, nil
-					}
-					return false, readErr
-				}
-				if event.SessionID != session.SessionID {
-					continue
-				}
-				observer.add(event)
-				if observation, ok := observer.selectRead(); ok {
-					selected = observation
-					return true, nil
-				}
+			if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+				return readObservation{}, false, nil
 			}
-		},
-	)
-	if err != nil {
-		return readObservation{}, false, err
+			return readObservation{}, false, err
+		}
+		if event.SessionID != session.SessionID {
+			continue
+		}
+		observer.add(event)
+		if observation, ok := observer.selectRead(); ok {
+			return observation, true, nil
+		}
 	}
-	if readiness.ObservationFailed() {
-		return readObservation{}, false, readiness.LastObservationError
-	}
-	return selected, readiness.Observed, nil
 }
 
 func (o *authNetworkObserver) add(event cdp.Event) {

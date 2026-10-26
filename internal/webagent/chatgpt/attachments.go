@@ -565,7 +565,6 @@ func refreshBrowserConversationReadTemplate(
 		ctx,
 		config.Client,
 		session,
-		defaultObservationAttempts,
 		defaultObservationTimeout,
 	)
 	if err == nil && !found {
@@ -580,7 +579,6 @@ func refreshBrowserConversationReadTemplate(
 			ctx,
 			config.Client,
 			session,
-			defaultObservationAttempts,
 			defaultObservationTimeout,
 		)
 	}

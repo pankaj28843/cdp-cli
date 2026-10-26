@@ -803,7 +803,7 @@ func (a *app) newWorkflowAgentChatGPTAuthRefreshCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
 		Short: "Refresh ChatGPT browser-observed read evidence",
-		Long: "Open one fresh owned ChatGPT target, observe signed-in UI, cookies, and an authenticated backend read, " +
+		Long: "Open one fresh owned ChatGPT target, capture the first successful authenticated GET matching https://chatgpt.com/backend-api/* and its session cookies, " +
 			"persist owner-only replay state, and exact-close the target without creating a conversation.",
 		Example: "  cdp workflow agent chatgpt auth refresh --json",
 		Args:    cobra.NoArgs,

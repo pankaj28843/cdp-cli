@@ -201,6 +201,7 @@ func TestRefreshAuthWaitsForSlowNativeReadBeforeReload(t *testing.T) {
 type slowAuthReadBrowser struct {
 	*authenticatedReadBrowser
 	readyAt time.Time
+	delay   time.Duration
 }
 
 func TestRefreshAuthCapturesCookiesAfterNativeRead(t *testing.T) {
@@ -246,7 +247,11 @@ func (b *rotatingAuthReadBrowser) CallSession(ctx context.Context, sessionID, me
 
 func (b *slowAuthReadBrowser) CallSession(ctx context.Context, sessionID, method string, params, result any) error {
 	if method == "Page.navigate" || method == "Page.reload" {
-		b.readyAt = time.Now().Add(8200 * time.Millisecond)
+		delay := b.delay
+		if delay == 0 {
+			delay = 8200 * time.Millisecond
+		}
+		b.readyAt = time.Now().Add(delay)
 	}
 	return b.authenticatedReadBrowser.CallSession(ctx, sessionID, method, params, result)
 }
@@ -259,5 +264,62 @@ func (b *slowAuthReadBrowser) ReadEvent(ctx context.Context) (cdp.Event, error) 
 		return cdp.Event{}, ctx.Err()
 	case <-timer.C:
 		return b.authenticatedReadBrowser.ReadEvent(ctx)
+	}
+}
+
+// Successful authenticated traffic is evidence even while the composer is
+// loading or its markup has changed. Never reload it just to prove UI readiness.
+func TestRefreshAuthAcceptsFirstMatchingReadBeforeComposerReady(t *testing.T) {
+	client := newAuthenticatedReadBrowser(func(string, *testsupport.Browser) (any, error) {
+		return map[string]any{"signed_in": false, "signed_out": false}, nil
+	})
+	for i := range client.events {
+		client.events[i].Params = json.RawMessage(strings.ReplaceAll(string(client.events[i].Params),
+			"/backend-api/conversations", "/backend-api/accounts/check/v4-2023-04-27"))
+	}
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newReadTestStore(t, time.Now().Add(-2*time.Hour))
+	result := RefreshAuth(context.Background(), AuthRefreshConfig{
+		BrowserConfig: BrowserConfig{Client: client, Engine: engine, Journal: journal},
+		Store:         store, ObservationTimeout: 150 * time.Millisecond,
+	})
+	if !result.OK || result.Cleanup.State != webagent.CleanupClosed {
+		t.Fatalf("authenticated traffic with unready composer = %+v", result)
+	}
+	_, _, reloads, _, _, _, _ := client.Snapshot()
+	if len(reloads) != 0 {
+		t.Fatalf("reloaded before accepting first authenticated read: %v", reloads)
+	}
+	template, err := store.LoadTemplate(context.Background())
+	if err != nil || template.URL != Origin+"/backend-api/accounts/check/v4-2023-04-27" {
+		t.Fatalf("first matching backend read not retained: %q, %v", template.URL, err)
+	}
+}
+
+func TestRefreshAuthDoesNotInterruptSlowPageWithReloads(t *testing.T) {
+	client := &slowAuthReadBrowser{
+		authenticatedReadBrowser: newAuthenticatedReadBrowser(func(string, *testsupport.Browser) (any, error) {
+			return map[string]any{"signed_in": false, "signed_out": false}, nil
+		}),
+		delay: 400 * time.Millisecond,
+	}
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := RefreshAuth(context.Background(), AuthRefreshConfig{
+		BrowserConfig:      BrowserConfig{Client: client, Engine: engine, Journal: journal},
+		Store:              newReadTestStore(t, time.Now().Add(-2*time.Hour)),
+		ObservationTimeout: time.Second,
+	})
+	if !result.OK {
+		t.Fatalf("slow page refresh = %+v", result)
+	}
+	_, _, reloads, _, _, _, _ := client.Snapshot()
+	if len(reloads) != 0 {
+		t.Fatalf("interrupted native initialization: %v", reloads)
 	}
 }
