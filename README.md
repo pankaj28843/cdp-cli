@@ -160,6 +160,7 @@ cdp console --errors --target-index 2 --wait 2s --json
 cdp network --failed --target-index 2 --wait 2s --json
 cdp network capture --target-index 2 --redact safe --wait 2s --json
 cdp network capture --target-index 2 --redact none --out tmp/network.local.json --json
+cdp network auth --origin https://example.test --username-env SITE_USER --password-env SITE_PASSWORD --target <target-id> --reload --duration 5s --json
 cdp network block --target-index 2 --pattern '*://*/analytics/*' --duration 10s --json
 cdp network mock --target-index 2 --rule '{"url_pattern":"*://*/api/config","status":200,"body":"{\"enabled\":true}","max_matches":1}' --duration 10s --json
 cdp wait response --target-index 2 --match-url /api --status 200 --json
@@ -1396,3 +1397,26 @@ attachments remain available to the provider. If acknowledgement or completion
 is uncertain, follow the returned exact-conversation read command; never repeat
 Send to recover an answer. Image metadata is readiness evidence, not downloaded
 bytes: use `download-attachments` and its manifest for original artifact recovery.
+
+### Temporary HTTP Basic authentication
+
+`network auth` handles HTTP Basic challenges for one explicit origin and page
+target through the daemon. Pass environment variable **names**, never credential
+values, with `--username-env` and `--password-env`. Values are read only when a
+matching server Basic challenge arrives; missing or empty values fail closed.
+Each request receives credentials at most once, with at most 16 credential
+responses per invocation. Other origins (including redirects), proxy challenges,
+unsupported schemes and repeated challenges receive `CancelAuth`. Both the
+request URL origin and challenge origin must match `--origin`; default ports
+are normalized. HTTPS is required; HTTP is accepted only for loopback fixtures.
+
+The command enables interception before optional `--reload`, listens for the
+bounded `--duration` (maximum five minutes), then disables Fetch and detaches its
+session. The CLI and daemon do not persist credentials or include them, request
+headers, URLs or challenge details in this command's output. Local owner-only
+daemon IPC carries the credentials in memory to Chrome. Chrome can cache accepted
+HTTP authentication in its browser session; ending this command does not erase
+that cache. Use a disposable browser profile when that lifecycle is required.
+Avoid concurrent Fetch interception commands on the same target. Successful
+output proves interception and cleanup, not successful login, identity or
+application availability; verify an independent expected page marker afterward.

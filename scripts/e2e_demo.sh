@@ -1398,4 +1398,5 @@ if [[ -n "${CDP_E2E_REAL_BUNDLE_URL:-}" ]]; then
   require_artifact "$real_bundle_path"
 fi
 
+python3 scripts/e2e_http_auth.py "$binary"
 printf 'demo e2e passed: %s\n' "$app_url"

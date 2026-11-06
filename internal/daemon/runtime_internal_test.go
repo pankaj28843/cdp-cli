@@ -106,6 +106,10 @@ func TestHoldRetiresWhenReplacementRuntimeOwnsMode(t *testing.T) {
 	stateDir := shortInternalStateDir(t)
 	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
 
+	// A local rejected handshake is immediate and independent of DNS/proxy state.
+	rejected := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer rejected.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -113,7 +117,7 @@ func TestHoldRetiresWhenReplacementRuntimeOwnsMode(t *testing.T) {
 		done <- holdWithOptions(
 			ctx,
 			stateDir,
-			"ws://superseded-hold.invalid/devtools/browser/old",
+			"ws"+strings.TrimPrefix(rejected.URL, "http")+"/devtools/browser/old",
 			"browser_url",
 			20*time.Millisecond,
 			holdOptions{},

@@ -585,6 +585,10 @@ func commandExamples(path string) []string {
 			"cdp network websocket --target-index 2 --redact safe --wait 2s --json",
 			"cdp network websocket --url-contains localhost --redact safe --json",
 		},
+		"cdp network auth": {
+			"cdp network auth --origin https://example.test --username-env SITE_USER --password-env SITE_PASSWORD --target <target-id> --reload --duration 5s --json",
+			"cdp schema network-auth --json",
+		},
 		"cdp network block": {
 			"cdp network block --pattern '*://*/analytics/*' --duration 10s --url-contains localhost --json",
 			"cdp network block --target-index 2 --pattern '*://*/analytics/*' --duration 10s --json",

@@ -96,6 +96,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	cmd.AddCommand(a.newNetworkWebSocketCommand())
 	cmd.AddCommand(a.newNetworkBlockCommand())
 	cmd.AddCommand(a.newNetworkMockCommand())
+	cmd.AddCommand(a.newNetworkAuthCommand())
 	return cmd
 }
 

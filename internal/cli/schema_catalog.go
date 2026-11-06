@@ -2183,6 +2183,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "network", Type: "network_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
 		},
+		"network-auth": {
+			Name:        "network-auth",
+			Description: "Bounded origin-bound HTTP Basic interception counters; does not establish authentication success",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "Interception and cleanup completed; does not prove authentication success."},
+				{Name: "target_id", Type: "string", Required: true, Description: "Selected target ID."},
+				{Name: "actions", Type: "object", Required: true, Description: "Provided, canceled, and continued counts without credentials or challenge details."},
+				{Name: "cleanup_complete", Type: "boolean", Required: true, Description: "Fetch interception disabled and the owned session detached."},
+				{Name: "bounded", Type: "boolean", Required: true, Description: "Finite interception window."},
+			},
+		},
 		"network-block": {
 			Name:        "network-block",
 			Description: "Bounded request blocking with explicit URL rules and independent cleanup for a selected page; accepts a mutually exclusive 1-based page --target-index selector.",

@@ -842,6 +842,14 @@ done
 "$binary" describe --command "network capture" --json | jq -e '.ok == true and .commands.name == "capture" and (.commands.examples | any(contains("--body-out-dir") and contains("--redact safe"))) and (.commands.flags[] | select(.name == "body-artifact-limit"))' >/dev/null
 "$binary" describe --command "network block" --json | jq -e '.ok == true and .commands.name == "block" and (.commands.examples | any(contains("--pattern") and contains("--duration"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "network mock" --json | jq -e '.ok == true and .commands.name == "mock" and (.commands.examples | any(contains("--rule") and contains("max_matches"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "network auth" --json | jq -e '.ok == true and .commands.name == "auth" and (.commands.examples | any(contains("--username-env") and contains("--password-env") and contains("--target"))) and (.commands.flags[] | select(.name == "reload"))' >/dev/null
+"$binary" schema network-auth --json | jq -e '.ok == true and .schema.name == "network-auth" and (.schema.fields | map(.name) | index("cleanup_complete"))' >/dev/null
+set +e
+auth_invalid_output="$("$binary" network auth --origin 'https://example.test/unsafe-path' --username-env CDP_TEST_AUTH_USER --password-env CDP_TEST_AUTH_PASS --target synthetic --json 2>/dev/null)"
+auth_invalid_code=$?
+set -e
+test "$auth_invalid_code" -eq 2
+jq -e '.ok == false and .code == "usage"' <<<"$auth_invalid_output" >/dev/null
 "$binary" describe --command "workflow page-load" --json | jq -e '.ok == true and .commands.name == "page-load" and (.commands.examples | any(contains("--reload"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 for diagnostic_schema in workflow-verify workflow-perf workflow-a11y workflow-page-load; do
   "$binary" schema "$diagnostic_schema" --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "cleanup" and .type == "workflow_page_cleanup" and (.description | contains("target_gone")))) and (.schema.description | contains("caller-owned"))' >/dev/null

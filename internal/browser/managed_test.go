@@ -730,13 +730,8 @@ while :; do sleep 1; done
 }
 
 func TestStopOwnedManagedChromeSignalsOwnedProcess(t *testing.T) {
-	// This test signals a synthetic metadata PID. Its process-table observation
-	// must also be synthetic rather than depending on the host's process count.
-	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "ps"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The signal and shutdown observations are synthetic; a real browser on the
+	// host's debugging port must not affect this ownership assertion.
 	stateDir := filepath.Join(t.TempDir(), "state")
 	metadata := browser.ManagedMetadata{
 		BrowserMode:         "headless",
@@ -752,9 +747,10 @@ func TestStopOwnedManagedChromeSignalsOwnedProcess(t *testing.T) {
 		t.Fatalf("SaveManagedMetadata returned error: %v", err)
 	}
 	var gotPID int
-	result, err := browser.StopOwnedManagedChrome(context.Background(), stateDir, func(pid int) error {
-		gotPID = pid
-		return nil
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Signal:            func(pid int) error { gotPID = pid; return nil },
+		ProcessLister:     func(context.Context, string) ([]int, error) { return nil, nil },
+		EndpointReachable: func(context.Context, string) bool { return false },
 	})
 	if err != nil {
 		t.Fatalf("StopOwnedManagedChrome returned error: %v", err)
