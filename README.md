@@ -1398,12 +1398,14 @@ is uncertain, follow the returned exact-conversation read command; never repeat
 Send to recover an answer. Image metadata is readiness evidence, not downloaded
 bytes: use `download-attachments` and its manifest for original artifact recovery.
 
-### Temporary HTTP Basic authentication
+### Temporary HTTP Basic or NTLM authentication
 
-`network auth` handles HTTP Basic challenges for one explicit origin and page
-target through the daemon. Pass environment variable **names**, never credential
+`network auth` handles HTTP Basic challenges by default. Explicit `--scheme ntlm`
+permits only NTLM server challenges instead. Both modes bind one explicit origin
+and page target through the daemon. Pass environment variable **names**, never credential
 values, with `--username-env` and `--password-env`. Values are read only when a
-matching server Basic challenge arrives; missing or empty values fail closed.
+matching server challenge for the selected scheme arrives; missing or empty
+values fail closed.
 Each request receives credentials at most once, with at most 16 credential
 responses per invocation. Other origins (including redirects), proxy challenges,
 unsupported schemes and repeated challenges receive `CancelAuth`. Both the
@@ -1420,3 +1422,23 @@ that cache. Use a disposable browser profile when that lifecycle is required.
 Avoid concurrent Fetch interception commands on the same target. Successful
 output proves interception and cleanup, not successful login, identity or
 application availability; verify an independent expected page marker afterward.
+
+NTLM is an explicit-credentials mode: Chrome performs the negotiation using the
+opaque username and password read from the named variables. A username may include
+a domain qualifier such as `DOMAIN\user`; no identity value belongs in command
+arguments. This command does not configure Kerberos, browser integrated-auth
+policies or a domain login. Interception success does not prove NTLM negotiation
+completed or establish a bank identity.
+
+`--scheme` permits a challenge scheme; Chromium still chooses among the schemes
+advertised by the server. If Chromium selects Negotiate, `--scheme ntlm` cancels
+that challenge; cancellation does not request an NTLM fallback. A server offering
+both schemes therefore does not guarantee that this command can authenticate.
+
+The optional synthetic NTLM acceptance gate is `make e2e-ntlm-installed` after
+`make install`. It requires Samba's `ntlm_auth` helper on `PATH` and a local
+headless Chromium installation. The fixture verifies a real multi-round NTLM
+exchange using synthetic credentials, default Basic rejection, a wrong-password
+denial and an offer containing both Negotiate and NTLM. It uses isolated state
+and does not contact an identity provider. This extra prerequisite belongs to
+the targeted NTLM gate; ordinary demo verification does not require Samba.

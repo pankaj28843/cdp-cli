@@ -2185,7 +2185,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-auth": {
 			Name:        "network-auth",
-			Description: "Bounded origin-bound HTTP Basic interception counters; does not establish authentication success",
+			Description: "Bounded origin-bound HTTP Basic (default) or explicit NTLM interception counters; does not establish authentication success",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "Interception and cleanup completed; does not prove authentication success."},
 				{Name: "target_id", Type: "string", Required: true, Description: "Selected target ID."},

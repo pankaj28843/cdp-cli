@@ -587,6 +587,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp network auth": {
 			"cdp network auth --origin https://example.test --username-env SITE_USER --password-env SITE_PASSWORD --target <target-id> --reload --duration 5s --json",
+			"cdp network auth --scheme ntlm --origin https://example.test --username-env SITE_USER --password-env SITE_PASSWORD --target <target-id> --reload --duration 5s --json",
 			"cdp schema network-auth --json",
 		},
 		"cdp network block": {

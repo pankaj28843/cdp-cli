@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := build
-.PHONY: help build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-agent-workflows-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install leak-check test verify vet
+.PHONY: help build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-ntlm-installed e2e-installed e2e-agent-workflows-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 GUIDE := internal/cli/guide.md
@@ -77,6 +77,18 @@ e2e-installed:
 		exit 2; \
 	fi; \
 	bash scripts/e2e.sh "$$cdp_bin"
+
+e2e-ntlm-installed:
+	@cdp_bin="$$(command -v cdp)"; \
+	if [ -z "$$cdp_bin" ] || [ ! -x "$$cdp_bin" ]; then \
+		echo "cdp is not executable on PATH; run make install first" >&2; \
+		exit 2; \
+	fi; \
+	if ! command -v ntlm_auth >/dev/null 2>&1; then \
+		echo "e2e-ntlm-installed requires Samba ntlm_auth on PATH; install the Samba winbind helper before this synthetic gate" >&2; \
+		exit 2; \
+	fi; \
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/e2e_ntlm_live.py "$$cdp_bin"
 
 e2e-agent-workflows-installed:
 	go run ./cmd/e2e-installed
