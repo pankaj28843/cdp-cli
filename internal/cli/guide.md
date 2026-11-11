@@ -704,3 +704,19 @@ time is beyond the command deadline, await returns the rate-limit error without
 issuing another read. It does not shorten that cooldown to fit the deadline.
 
 Gemini Ask, detail, and await certify terminal text only after the last answer exposes idle content and an enabled Copy control, and two consecutive exact snapshots agree. Growing, unconfirmed, or interrupted readback stays incomplete with the same conversation locator; use its returned await command rather than sending the prompt again.
+
+### Pre-arm one owned authentication popup
+
+Use `network auth --popup-prearm --target <owned-root> --origin https://example.test
+--username-env SITE_USER --password-env SITE_PASSWORD --ready-file <private-path>
+--duration 2m --json` before the application's login click. Wait for the exclusive
+mode-0600 readiness file. This one-use `window.open` hook opens a new blank child,
+pauses only the declared root, proves child ownership, enables Fetch, then resumes
+normal navigation. It never uses browser-wide auto-attach. Existing named windows
+are not reused. The hook must be installed after the root's final navigation and
+requires ordinary same-origin `window.open` semantics; `noopener`/`noreferrer`,
+blocked popups, navigation away, and ambiguous children fail closed. Do not combine
+with `--reload`. Cleanup restores the hook, disables owned interception/debugging,
+and detaches sessions; it closes only an unarmed child created by its own hook.
+The report counts interception actions, not successful application login. MFA
+remains a human action; do not reload, resend, or retry when its number appears.

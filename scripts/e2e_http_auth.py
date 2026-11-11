@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 
 @contextlib.contextmanager
@@ -59,7 +60,7 @@ def main():
                               "environment": {key: startup.get("environment", {}).get(key) for key in ("allowed", "state", "network")}}))
             assert startup.get("state") in ("healthy", "started", "repaired"), "synthetic browser startup was skipped"
             assert run("daemon", "health")["health"]["state"] == "healthy"
-            for case in ("valid", "wrong", "cross-origin"):
+            for case in ("valid", "wrong", "cross-origin", "popup-valid", "popup-cross-origin"):
                 counts = {"accepted": 0, "denied": 0, "foreign_authorization": 0, "foreign_requests": 0}
 
                 class Handler(http.server.BaseHTTPRequestHandler):
@@ -95,16 +96,50 @@ def main():
                 origin, foreign_url = serve(), serve()
                 target = run("open", origin + "/")["page"]["id"]
                 targets.append(target)
-                path = "/redirect" if case == "cross-origin" else "/basic"
+                path = "/redirect" if case.endswith("cross-origin") else "/basic"
                 run("eval", "history.replaceState(null, '', " + json.dumps(path) + ")", "--target", target)
                 credentials = dict(env)
                 if case == "wrong":
                     credentials["CDP_TEST_AUTH_PASS"] = "fixture-wrong-password"
-                report = run("network", "auth", "--origin", origin, "--username-env", "CDP_TEST_AUTH_USER",
-                             "--password-env", "CDP_TEST_AUTH_PASS", "--target", target,
-                             "--reload", "--duration", "2s", environment=credentials)
+                if case.startswith("popup-"):
+                    ready = root / (case + "-ready.json")
+                    process = subprocess.Popen(prefix + ["network", "auth", "--origin", origin,
+                        "--username-env", "CDP_TEST_AUTH_USER", "--password-env", "CDP_TEST_AUTH_PASS",
+                        "--target", target, "--popup-prearm", "--ready-file", str(ready),
+                        "--duration", "3s", "--json"], env=credentials, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True)
+                    try:
+                        deadline = time.monotonic() + 8
+                        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                            time.sleep(.05)
+                        assert ready.exists() and ready.stat().st_mode & 0o777 == 0o600, "popup readiness missing"
+                        unrelated = run("open", foreign_url + "/")["page"]["id"]
+                        targets.append(unrelated)
+                        untouched = run("eval", "!window.__cdpPopupAuthOwner && window.open.name !== 'cdpPrearmPopup'", "--target", unrelated)
+                        assert untouched["result"]["value"] is True, "unrelated page affected by supervision"
+                        run("Runtime.evaluate", json.dumps({"expression": "window.open(" + json.dumps(origin + path) + ", 'fixture-popup') !== null", "returnByValue": True, "userGesture": True}), "--target-id", target)
+                        stdout, _ = process.communicate(timeout=12)
+                        assert process.returncode == 0, "popup collector failed"
+                        report = json.loads(stdout)
+                        assert report["actions"]["popups_armed"] == 1, "popup not prearmed"
+                    finally:
+                        if process.poll() is None:
+                            process.terminate()
+                            process.communicate(timeout=10)
+                        children = run("Target.getTargets", "{}")['result']['targetInfos']
+                        for child in children:
+                            if child.get('openerId') == target:
+                                run("page", "close", "--target", child['targetId'])
+                    run("page", "close", "--target", unrelated)
+                    targets.remove(unrelated)
+                    restored = run("eval", "!window.__cdpPopupAuthOwner && window.open.name !== 'cdpPrearmPopup'", "--target", target)
+                    assert restored.get("result", {}).get("value") is True, "popup hook not restored"
+                else:
+                    report = run("network", "auth", "--origin", origin, "--username-env", "CDP_TEST_AUTH_USER",
+                                 "--password-env", "CDP_TEST_AUTH_PASS", "--target", target,
+                                 "--reload", "--duration", "2s", environment=credentials)
                 assert report["ok"] and report["cleanup_complete"], "auth cleanup incomplete"
-                if case == "valid":
+                if case.endswith("valid"):
                     assert counts["accepted"] >= 1, "valid Basic did not reach HTTP 200"
                 elif case == "wrong":
                     assert counts["accepted"] == 0 and 1 <= counts["denied"] <= 3, "wrong Basic not bounded"

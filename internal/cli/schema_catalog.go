@@ -2189,8 +2189,9 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "Interception and cleanup completed; does not prove authentication success."},
 				{Name: "target_id", Type: "string", Required: true, Description: "Selected target ID."},
-				{Name: "actions", Type: "object", Required: true, Description: "Provided, canceled, and continued counts without credentials or challenge details."},
+				{Name: "actions", Type: "object", Required: true, Description: "Provided, canceled, continued, and optional popups_armed counts without credentials or challenge details."},
 				{Name: "cleanup_complete", Type: "boolean", Required: true, Description: "Fetch interception disabled and the owned session detached."},
+				{Name: "popup_prearm", Type: "boolean", Required: false, Description: "One-use owned-root popup handshake enabled; unrelated pages are never paused."},
 				{Name: "bounded", Type: "boolean", Required: true, Description: "Finite interception window."},
 			},
 		},
