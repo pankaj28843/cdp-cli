@@ -396,6 +396,11 @@ func ContinueConversation(
 			data.Metadata["available_thinking"] =
 				append([]string{}, selection.IntelligenceOptions...)
 			data.Metadata["model_selection_action"] = selection.ModelAction
+			data.Metadata["model_policy_requested"] = config.Selection.Model
+			data.Metadata["model_policy_effective"] = selection.ModelEffectivePolicy
+			if selection.ModelFallbackReason != "" {
+				data.Metadata["model_fallback_reason"] = selection.ModelFallbackReason
+			}
 			data.Metadata["available_models"] =
 				append([]string{}, selection.ModelOptions...)
 			recordSelectionExpectation(data.Metadata, selection)

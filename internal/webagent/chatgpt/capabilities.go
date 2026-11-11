@@ -271,10 +271,13 @@ func RefreshCapabilities(
 
 func capabilityStateAndMessage(probe capabilityProbe) (string, string) {
 	state := "unknown"
-	message := "ChatGPT composer was observed, but its Chat and thinking controls were not both proven."
+	message := "ChatGPT composer was observed, but its product and thinking controls were not both proven."
+	productReady := len(probe.ProductModes) == 0 ||
+		(containsString(probe.ProductModes, "Chat") &&
+			strings.EqualFold(probe.SelectedProduct, "Chat"))
 	if !probe.OK ||
 		!probe.ComposerObserved ||
-		!containsString(probe.ProductModes, "Chat") ||
+		!productReady ||
 		len(probe.IntelligenceOptions) == 0 ||
 		strings.TrimSpace(probe.SelectedIntelligence) == "" ||
 		!containsString(
@@ -284,9 +287,13 @@ func capabilityStateAndMessage(probe capabilityProbe) (string, string) {
 		return state, message
 	}
 	state = "ready"
-	message = "Chat product and logically ordered thinking modes were observed in the headed composer; the model catalog was not observed."
+	productEvidence := "Chat product"
+	if len(probe.ProductModes) == 0 {
+		productEvidence = "default Chat surface"
+	}
+	message = productEvidence + " and logically ordered thinking modes were observed in the headed composer; the model catalog was not observed."
 	if probe.ModelOptionsObserved {
-		message = "Chat product, logically ordered thinking modes, and visible model options were observed in the headed composer."
+		message = productEvidence + ", logically ordered thinking modes, and visible model options were observed in the headed composer."
 	}
 	if len(probe.Tools) > 0 {
 		message += " The visible plus-menu tools were also sampled; tool visibility is not direct-ask support."
@@ -414,6 +421,16 @@ const capabilityProbeExpression = `(async () => {
     button.getAttribute('aria-checked') === 'true' &&
     productKnown.some((candidate) => candidate.toLowerCase() === textOf(button).toLowerCase())
   );
+  const specialized = document.querySelector(
+    'iframe[src*="deep-research"],iframe[src*="connector_openai_deep_research"],' +
+    '[data-testid*="deep-research"][aria-pressed="true"],' +
+    '[data-testid*="agent"][aria-pressed="true"]'
+  );
+  const defaultChatSurface = radios.length === 0 && !specialized &&
+    location.origin === 'https://chatgpt.com' && location.pathname === '/' &&
+    Array.from(document.querySelectorAll(
+      'button[aria-label="Select ChatGPT model"]'
+    )).filter(visible).length === 1;
 
 	  const intelligenceKnown = [
 	    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
@@ -513,7 +530,11 @@ const capabilityProbeExpression = `(async () => {
   const tools = exactKnown(menuText, toolsKnown);
 
   return {
-    ok: intelligencePickers.length === 1,
+    ok: intelligencePickers.length === 1 &&
+      (defaultChatSurface ||
+        (productModes.includes('Chat') &&
+          selectedProductButton &&
+          textOf(selectedProductButton) === 'Chat')),
     composer_observed: true,
     product_modes: productModes,
     selected_product: selectedProductButton ? textOf(selectedProductButton) : '',

@@ -36,16 +36,17 @@ type AskConfig struct {
 }
 
 type AskData struct {
-	SchemaVersion      string         `json:"schema_version"`
-	ConversationMode   string         `json:"conversation_mode"`
-	Text               string         `json:"text"`
-	CompletionState    string         `json:"completion_state"`
-	ReadMode           string         `json:"read_mode"`
-	CapabilityID       string         `json:"capability_id"`
-	PromptFingerprint  string         `json:"prompt_fingerprint,omitempty"`
-	PromptCharacters   int            `json:"prompt_characters"`
-	DetailReadAttempts int            `json:"detail_read_attempts"`
-	Metadata           map[string]any `json:"metadata"`
+	SchemaVersion       string               `json:"schema_version"`
+	ConversationMode    string               `json:"conversation_mode"`
+	Text                string               `json:"text"`
+	CompletionState     string               `json:"completion_state"`
+	ReadMode            string               `json:"read_mode"`
+	CapabilityID        string               `json:"capability_id"`
+	PromptFingerprint   string               `json:"prompt_fingerprint,omitempty"`
+	PromptCharacters    int                  `json:"prompt_characters"`
+	DetailReadAttempts  int                  `json:"detail_read_attempts"`
+	Metadata            map[string]any       `json:"metadata"`
+	ReadinessDiagnostic *ReadinessDiagnostic `json:"readiness_diagnostic,omitempty"`
 }
 
 type composerObservation struct {
@@ -262,6 +263,7 @@ func Ask(
 			data.Metadata["composer_readiness_stage"] = readiness.Stage
 			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
+				data.ReadinessDiagnostic = readinessDiagnostic(readiness, readinessErr)
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,

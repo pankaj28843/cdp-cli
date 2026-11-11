@@ -889,7 +889,7 @@ func conversationDetailExpression(conversationID string) (string, error) {
 	  ).filter(Boolean);
 	  const streaming = Array.from(document.querySelectorAll('button')).some(button => {
 	    const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
-	    return /stop/i.test(button.getAttribute('aria-label') || '') &&
+	    return /^stop(?: response)?$/i.test((button.getAttribute('aria-label') || '').trim()) &&
 	      rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
 	      style.visibility !== 'hidden' && Number(style.opacity || '1') !== 0;
 	  });

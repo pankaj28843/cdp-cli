@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -26,6 +28,7 @@ const (
 type AuthRefreshConfig struct {
 	BrowserConfig
 	Store              *Store
+	HTTPClient         *http.Client
 	ObservationTimeout time.Duration
 	Now                func() time.Time
 }
@@ -185,14 +188,23 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 				}
 				data.RequestShape = "observed_read"
 			} else {
-				_ = lease.MarkIncomplete(context.Background())
-				data.AuthState = "request_not_observed"
-				return authFailure(
-					runID, config, webagent.StageObserveTerminal, target, pending,
-					"chatgpt_read_request_not_observed", "auth",
-					"No successful authenticated ChatGPT backend GET matched https://chatgpt.com/backend-api/*",
-					data,
-				)
+				// Retain the observed request shape only after one fresh, same-origin
+				// backend read validates it with the current browser cookies.
+				var validated bool
+				template, validated = validateRetainedAuthRead(ctx, config, session, userAgent, capturedAt)
+				if !validated {
+					_ = lease.MarkIncomplete(context.Background())
+					data.AuthState = "request_not_observed"
+					return authFailure(
+						runID, config, webagent.StageObserveTerminal, target, pending,
+						"chatgpt_read_request_not_observed", "auth",
+						"No successful authenticated ChatGPT backend GET matched https://chatgpt.com/backend-api/*",
+						data,
+					)
+				}
+				data.CookieCount = len(template.Cookies)
+				data.SessionCookieObserved = true
+				data.RequestShape = "retained_read_validated"
 			}
 			if parsed, parseErr := url.Parse(template.URL); parseErr == nil {
 				data.EndpointPath = parsed.Path
@@ -641,6 +653,95 @@ func loadExistingTemplate(ctx context.Context, store *Store) *RequestTemplate {
 		return nil
 	}
 	return &template
+}
+
+func validateRetainedAuthRead(
+	ctx context.Context,
+	config AuthRefreshConfig,
+	session *cdp.PageSession,
+	userAgent string,
+	capturedAt string,
+) (RequestTemplate, bool) {
+	existing := loadExistingTemplate(ctx, config.Store)
+	if existing == nil {
+		return RequestTemplate{}, false
+	}
+	cookies, err := readCookies(ctx, session)
+	if err != nil || !hasSessionCookie(cookies) {
+		return RequestTemplate{}, false
+	}
+	cookieHeader := freshObservedCookieHeader(existing.CookieHeader, cookies)
+	if cookieHeader == "" {
+		return RequestTemplate{}, false
+	}
+	template := *existing
+	template.Headers = make(map[string]string, len(existing.Headers))
+	for name, value := range existing.Headers {
+		template.Headers[name] = value
+	}
+	template.Headers["user-agent"] = userAgent
+	template.Cookies = cookies
+	template.CookieHeader = cookieHeader
+	template.BrowserUserAgent = userAgent
+	template.CapturedAt = capturedAt
+	template.Source = "headed-cdp-retained-read-shape"
+	if template.Validate() != nil {
+		return RequestTemplate{}, false
+	}
+	parsed, err := url.Parse(template.URL)
+	if err != nil {
+		return RequestTemplate{}, false
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	request, err := newChatGPTRequest(readCtx, template, template.URL, parsed.Path)
+	if err != nil {
+		return RequestTemplate{}, false
+	}
+	client := config.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	} else {
+		copy := *client
+		client = &copy
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return RequestTemplate{}, false
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return RequestTemplate{}, false
+	}
+	const maxValidationBody = 2 << 20
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxValidationBody+1))
+	if err != nil || len(body) > maxValidationBody {
+		return RequestTemplate{}, false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) != nil || object == nil {
+		return RequestTemplate{}, false
+	}
+	return template, true
+}
+
+func freshObservedCookieHeader(observed string, cookies map[string]string) string {
+	parts := strings.Split(observed, ";")
+	fresh := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name, _, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if value, present := cookies[name]; present {
+			fresh = append(fresh, name+"="+value)
+		}
+	}
+	return strings.Join(fresh, "; ")
 }
 
 func authFailure(

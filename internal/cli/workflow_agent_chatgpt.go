@@ -744,9 +744,10 @@ func (a *app) newWorkflowAgentChatGPTConversationsAwaitCommand() *cobra.Command 
 func (a *app) newWorkflowAgentChatGPTConversationsDeleteCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete CONVERSATION_ID",
-		Short: "Visibly delete one exact ChatGPT conversation",
-		Long: "Own one fresh headed target, resolve one exact history row and confirmation dialog, dispatch one raw-input Delete action, " +
-			"prove the same-target home redirect, and exact-close the target.",
+		Short: "Delete one exact ChatGPT conversation",
+		Long: "Use the observed authenticated DELETE route with owner-only pending evidence and require its success response. " +
+			"If preparation fails before dispatch, use one exact headed confirmation and prove the same-target redirect. " +
+			"An uncertain request is never retried automatically.",
 		Example: "  cdp workflow agent chatgpt conversations delete <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

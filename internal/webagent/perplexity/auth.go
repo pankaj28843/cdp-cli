@@ -32,13 +32,50 @@ type AuthRefreshConfig struct {
 }
 
 type AuthRefreshData struct {
-	SchemaVersion         string `json:"schema_version"`
-	AuthState             string `json:"auth_state"`
-	TemplatePath          string `json:"template_path"`
-	SessionCookieObserved bool   `json:"session_cookie_observed"`
-	CookieCount           int    `json:"cookie_count"`
-	RequestShape          string `json:"request_shape"`
-	CapturedAt            string `json:"captured_at,omitempty"`
+	SchemaVersion         string               `json:"schema_version"`
+	AuthState             string               `json:"auth_state"`
+	TemplatePath          string               `json:"template_path"`
+	SessionCookieObserved bool                 `json:"session_cookie_observed"`
+	CookieCount           int                  `json:"cookie_count"`
+	RequestShape          string               `json:"request_shape"`
+	CapturedAt            string               `json:"captured_at,omitempty"`
+	ReadinessDiagnostic   *ReadinessDiagnostic `json:"readiness_diagnostic,omitempty"`
+}
+
+// ReadinessDiagnostic exposes only bounded counters and fixed categories.
+// Browser error text can contain private page or session data and stays local.
+type ReadinessDiagnostic struct {
+	Attempt                int    `json:"attempt"`
+	Stage                  string `json:"stage"`
+	ValidObservations      int    `json:"valid_observations"`
+	StageValidObservations int    `json:"stage_valid_observations"`
+	ErrorCategory          string `json:"error_category"`
+}
+
+func readinessDiagnostic(result authreadiness.Result, sequenceErr error) *ReadinessDiagnostic {
+	category := "no_valid_observation"
+	switch {
+	case errors.Is(sequenceErr, context.DeadlineExceeded):
+		category = "sequence_timeout"
+	case errors.Is(sequenceErr, context.Canceled):
+		category = "sequence_canceled"
+	case sequenceErr != nil:
+		category = "sequence_error"
+	case errors.Is(result.LastObservationError, context.DeadlineExceeded):
+		category = "observation_timeout"
+	case errors.Is(result.LastObservationError, context.Canceled):
+		category = "observation_canceled"
+	case result.LastObservationError != nil &&
+		!errors.Is(result.LastObservationError, authreadiness.ErrObservationIncomplete):
+		category = "observation_error"
+	}
+	return &ReadinessDiagnostic{
+		Attempt:                result.Attempt,
+		Stage:                  string(result.Stage),
+		ValidObservations:      result.SuccessfulObservations,
+		StageValidObservations: result.StageObservations,
+		ErrorCategory:          category,
+	}
 }
 
 type DoctorData struct {
@@ -149,6 +186,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			)
 			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
+				data.ReadinessDiagnostic = readinessDiagnostic(readiness, readinessErr)
 				return authFailure(
 					runID, config, webagent.StagePrepared, target, pending,
 					"perplexity_auth_readiness_failed", "connection",

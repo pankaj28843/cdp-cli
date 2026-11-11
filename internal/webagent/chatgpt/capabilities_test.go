@@ -38,6 +38,7 @@ func TestCapabilityMessageDoesNotClaimMissingModelCatalog(t *testing.T) {
 		OK:                   true,
 		ComposerObserved:     true,
 		ProductModes:         []string{"Chat", "Work"},
+		SelectedProduct:      "Chat",
 		IntelligenceOptions:  []string{"Medium", "High", "Extra High", "Pro"},
 		SelectedIntelligence: "Pro",
 	}
@@ -56,6 +57,7 @@ func TestCapabilityMessageReportsIndependentlyObservedModelCatalog(t *testing.T)
 		OK:                   true,
 		ComposerObserved:     true,
 		ProductModes:         []string{"Chat", "Work"},
+		SelectedProduct:      "Chat",
 		IntelligenceOptions:  []string{"Medium", "High", "Extra High", "Pro"},
 		SelectedIntelligence: "Pro",
 		ModelOptions:         []string{"o3", "GPT-5.6 Sol"},
@@ -76,6 +78,7 @@ func TestNormalizeRuntimeCapabilitiesDoesNotInferModelObservation(t *testing.T) 
 		State:                "ready",
 		ComposerObserved:     true,
 		ProductModes:         []string{"Chat", "Work"},
+		SelectedProduct:      "Chat",
 		IntelligenceOptions:  []string{"Medium", "High", "Extra High", "Pro"},
 		SelectedIntelligence: "Pro",
 		ModelOptions:         []string{"o3", "GPT-5.6 Sol"},
@@ -97,6 +100,7 @@ func TestNormalizeRuntimeCapabilitiesDoesNotInventMissingModelCatalog(t *testing
 		State:                "ready",
 		ComposerObserved:     true,
 		ProductModes:         []string{"Chat", "Work"},
+		SelectedProduct:      "Chat",
 		IntelligenceOptions:  []string{"Medium", "High", "Extra High", "Pro"},
 		SelectedIntelligence: "Pro",
 		Message:              "legacy capability message",
@@ -116,6 +120,7 @@ func TestNormalizeRuntimeCapabilitiesDowngradesMissingSelection(t *testing.T) {
 		State:                "ready",
 		ComposerObserved:     true,
 		ProductModes:         []string{"Chat", "Work"},
+		SelectedProduct:      "Chat",
 		IntelligenceOptions:  []string{"Medium"},
 		SelectedIntelligence: "GPT-5.6 Sol",
 		Source:               "headed-cdp-sanitized-composer-probe",
@@ -133,5 +138,42 @@ func TestNormalizeRuntimeCapabilitiesDowngradesMissingSelection(t *testing.T) {
 	}
 	if got.ModelOptionsObserved {
 		t.Fatal("legacy mixed label invented model observation")
+	}
+}
+
+func TestCapabilityStateAcceptsObservedDefaultChatSurfaceWithoutProductRadios(t *testing.T) {
+	probe := capabilityProbe{
+		OK:                   true,
+		ComposerObserved:     true,
+		IntelligenceOptions:  []string{"High"},
+		SelectedIntelligence: "High",
+	}
+	state, message := capabilityStateAndMessage(probe)
+	if state != "ready" {
+		t.Fatalf("state = %q, want ready", state)
+	}
+	if !strings.Contains(message, "default Chat surface") {
+		t.Fatalf("message = %q, want default surface evidence", message)
+	}
+}
+
+func TestCapabilityStateRequiresSelectedChatWhenProductRadiosPresent(t *testing.T) {
+	base := capabilityProbe{
+		OK:                   true,
+		ComposerObserved:     true,
+		ProductModes:         []string{"Chat", "Work"},
+		IntelligenceOptions:  []string{"High"},
+		SelectedIntelligence: "High",
+	}
+	for _, selected := range []string{"", "Work"} {
+		probe := base
+		probe.SelectedProduct = selected
+		if state, _ := capabilityStateAndMessage(probe); state != "unknown" {
+			t.Fatalf("selected %q state = %q, want unknown", selected, state)
+		}
+	}
+	base.SelectedProduct = "Chat"
+	if state, _ := capabilityStateAndMessage(base); state != "ready" {
+		t.Fatalf("selected Chat state = %q, want ready", state)
 	}
 }

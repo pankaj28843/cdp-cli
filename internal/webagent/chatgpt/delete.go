@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -20,6 +25,7 @@ const (
 type DeleteConfig struct {
 	BrowserConfig
 	Store        *Store
+	HTTPClient   *http.Client
 	Timeout      time.Duration
 	PollInterval time.Duration
 	Now          func() time.Time
@@ -125,7 +131,7 @@ func DeleteConversation(
 			[]string{"cdp workflow agent chatgpt doctor --json"},
 		)
 	}
-	_, auth, templateErr := config.Store.LoadTemplateStatus(
+	template, auth, templateErr := config.Store.LoadTemplateStatus(
 		ctx,
 		nowForDelete(config),
 		DefaultAuthTTL,
@@ -156,6 +162,13 @@ func DeleteConversation(
 	}
 	if config.PollInterval <= 0 {
 		config.PollInterval = 250 * time.Millisecond
+	}
+	// The observed backend DELETE returns 200 {"success":true}; keep the UI path
+	// only when the direct request cannot be prepared before dispatch.
+	if templateErr == nil {
+		if result, prepared := deleteDirect(ctx, config, runID, conversationID, template, data); prepared {
+			return result
+		}
 	}
 	return runOwned(
 		ctx,
@@ -581,6 +594,9 @@ func observeDeleteControls(
 	  const links = unique(Array.from(document.querySelectorAll('a[href]')).filter(
 	    link => link.getAttribute('href') === expectedPath
 	  ));
+	  const currentRows = unique(links.map(link =>
+	    link.closest('[data-sidebar-cycle-item]')
+	  ).filter(Boolean));
 	  const rowButtons = unique(links.flatMap(link =>
 	    Array.from(link.querySelectorAll(
 	      'button[data-conversation-options-trigger]'
@@ -588,11 +604,21 @@ func observeDeleteControls(
 	  )).filter(button =>
 	    button.getAttribute('data-conversation-options-trigger') === expected
 	  );
-	  const pageButtons = unique(Array.from(document.querySelectorAll('button')).filter(
+	  const legacyPageButtons = unique(Array.from(document.querySelectorAll('button')).filter(
 	    button =>
 	      button.getAttribute('aria-label') === 'Open conversation options' &&
 	      button.id === 'conversation-options-' + expected
 	  ));
+	  const currentPageButtons = currentRows.length === 1 ? unique(
+	    Array.from(currentRows[0].querySelectorAll('button[aria-haspopup="menu"]'))
+	      .filter(button => name(button) === 'Chat actions')
+	  ) : [];
+	  const pageButtons = legacyPageButtons.length ?
+	    legacyPageButtons : currentPageButtons;
+	  const currentSidebars = unique(Array.from(document.querySelectorAll(
+	    'aside[data-app-shell-left-panel-appearance]'
+	  )).filter(visible));
+	  const legacySidebar = document.querySelector('#stage-slideover-sidebar');
 	  const openSidebar = unique(Array.from(document.querySelectorAll('button')).filter(
 	    button => visible(button) && name(button) === 'Open sidebar'
 	  ));
@@ -604,7 +630,7 @@ func observeDeleteControls(
 	  )).filter(visible));
 	  const confirmations = unique(dialogs.flatMap(dialog =>
 	    Array.from(dialog.querySelectorAll('button'))
-	  ).filter(button => visible(button) && name(button) === 'Delete'));
+	  ).filter(button => visible(button) && name(button) === 'Delete chat'));
 	  const openAction = actionable(
 	    openSidebar.length === 1 ? openSidebar[0] : null
 	  );
@@ -620,8 +646,8 @@ func observeDeleteControls(
 	  return {
 	    route_matches: location.origin === 'https://chatgpt.com' &&
 	      location.pathname === expectedPath,
-	    sidebar_state:
-	      document.querySelector('#stage-slideover-sidebar')?.dataset.state || '',
+	    sidebar_state: legacySidebar ? legacySidebar.dataset.state || '' :
+	      currentSidebars.length === 1 ? 'open' : '',
 	    open_sidebar_count: openSidebar.length,
 	    open_sidebar_ready: openAction.ready,
 	    open_sidebar_x: openAction.x,
@@ -719,6 +745,109 @@ func deleteFailure(
 			action.Dispatch == webagent.DispatchNotPerformed
 		result.Error.RetryAt = retryAt
 	}
+	return result
+}
+
+func deleteDirect(
+	ctx context.Context,
+	config DeleteConfig,
+	runID string,
+	conversationID string,
+	template RequestTemplate,
+	data DeleteData,
+) (webagent.Result, bool) {
+	const route = "/backend-api/conversation/id/:conversation_id"
+	requestPath := "/backend-api/conversation/id/" + url.PathEscape(conversationID)
+	request, err := newChatGPTRequest(ctx, template, Origin+requestPath, route)
+	if err != nil {
+		return webagent.Result{}, false
+	}
+	request.Method = http.MethodDelete
+	request.Header.Set("Origin", Origin)
+	journal, err := json.Marshal(struct {
+		RunID          string `json:"run_id"`
+		ConversationID string `json:"conversation_id"`
+		Method         string `json:"method"`
+		Path           string `json:"path"`
+		CreatedAt      string `json:"created_at"`
+	}{runID, conversationID, http.MethodDelete, requestPath, nowForDelete(config).Format(time.RFC3339Nano)})
+	if err != nil || artifacts.WriteOwnerOnlyFileAtomic(
+		filepath.Join(filepath.Dir(config.Store.templatePath), "delete-pending", runID+".json"),
+		journal,
+	) != nil {
+		return webagent.Result{}, false
+	}
+	client := config.HTTPClient
+	if client == nil {
+		client = &http.Client{
+			Timeout: config.Timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return deleteDirectFailure(runID, config, conversationID, data,
+			webagent.DispatchUnknown, "chatgpt_delete_http_unconfirmed", "connection",
+			"ChatGPT direct delete outcome is unconfirmed after dispatch"), true
+	}
+	defer response.Body.Close()
+	data.Metadata["status_code"] = response.StatusCode
+	if response.StatusCode != http.StatusOK {
+		return deleteDirectFailure(runID, config, conversationID, data,
+			webagent.DispatchPerformed, "chatgpt_delete_http_failed", "provider",
+			fmt.Sprintf("ChatGPT direct delete returned status %d", response.StatusCode)), true
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+	if err != nil || len(body) > 4096 {
+		return deleteDirectFailure(runID, config, conversationID, data,
+			webagent.DispatchPerformed, "chatgpt_delete_response_unconfirmed", "connection",
+			"ChatGPT direct delete response could not be verified"), true
+	}
+	var envelope struct {
+		Success bool `json:"success"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || !envelope.Success {
+		return deleteDirectFailure(runID, config, conversationID, data,
+			webagent.DispatchPerformed, "chatgpt_delete_response_unconfirmed", "provider",
+			"ChatGPT direct delete success envelope was not observed"), true
+	}
+	data.CompletionState = "deleted"
+	data.Postcondition = "http_200_success_true"
+	result := operationSuccess(runID, config.BuildCommit,
+		webagent.OperationConversationsDelete, webagent.StageObserveTerminal,
+		"direct_http", nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+		data, nil)
+	result.State = webagent.StateTerminal
+	result.Action = &webagent.ActionEvidence{
+		Dispatch: webagent.DispatchPerformed, AttemptCount: 1, RawInputCount: 1,
+		PendingPersisted: true,
+	}
+	result.Conversation = conversationRef(conversationID)
+	return result, true
+}
+
+func deleteDirectFailure(
+	runID string,
+	config DeleteConfig,
+	conversationID string,
+	data DeleteData,
+	dispatch webagent.Dispatch,
+	code string,
+	errClass string,
+	message string,
+) webagent.Result {
+	result := operationFailure(runID, config.BuildCommit,
+		webagent.OperationConversationsDelete, webagent.StageActionDispatched,
+		"direct_http", nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+		code, errClass, message, data, nil)
+	result.Action = &webagent.ActionEvidence{
+		Dispatch: dispatch, AttemptCount: 1, RawInputCount: 1,
+		PendingPersisted: true,
+	}
+	result.Conversation = conversationRef(conversationID)
+	result.Error.RetrySafe = false
 	return result
 }
 

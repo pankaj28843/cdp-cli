@@ -36,6 +36,7 @@ func TestGeminiCompletionInstalled(t *testing.T) {
 		{"Copy disabled", strings.Replace(answer, `<button `, `<button disabled `, 1), false},
 		{"Copy ambiguous", strings.Replace(answer, `</model-response>`, `<button aria-label="Copy">Copy</button></model-response>`, 1), false},
 		{"visible Stop", answer + `<button aria-label="Stop response">Stop</button>`, false},
+		{"unrelated sidebar title containing Stops", answer + `<button aria-label="More options for Unaccessible Source Data Stops Adjudication">Options</button>`, true},
 		{"hidden Stop", answer + `<button hidden aria-label="Stop response">Stop</button>`, true},
 		{"last response still busy", answer + strings.Replace(answer, `aria-busy="false"`, `aria-busy="true"`, 1), false},
 	}

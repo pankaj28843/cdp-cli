@@ -238,6 +238,7 @@ func normalizeRuntimeCapabilities(runtime RuntimeCapabilities) RuntimeCapabiliti
 		OK:                   runtime.State == "ready",
 		ComposerObserved:     runtime.ComposerObserved,
 		ProductModes:         runtime.ProductModes,
+		SelectedProduct:      runtime.SelectedProduct,
 		IntelligenceOptions:  runtime.IntelligenceOptions,
 		SelectedIntelligence: runtime.SelectedIntelligence,
 		ModelOptions:         runtime.ModelOptions,

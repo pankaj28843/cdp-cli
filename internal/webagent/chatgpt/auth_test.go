@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +140,7 @@ func TestRefreshAuthRequiresNewReadEvidence(t *testing.T) {
 				Store:              store,
 				ObservationTimeout: 150 * time.Millisecond,
 				Now:                func() time.Time { return now },
+				HTTPClient:         fixedHTTPClient(http.StatusUnauthorized, `{}`),
 			})
 			if result.OK != observed || result.Cleanup.State != webagent.CleanupClosed {
 				t.Fatalf("refresh = %+v, want success=%v with owned target closed", result, observed)
@@ -164,6 +167,125 @@ func TestRefreshAuthRequiresNewReadEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRefreshAuthValidatesRetainedReadWithFreshCookies(t *testing.T) {
+	now := time.Now().UTC()
+	store := newReadTestStore(t, now.Add(-2*time.Hour))
+	client := &rotatingAuthReadBrowser{newAuthenticatedReadBrowser(func(string, *testsupport.Browser) (any, error) {
+		return map[string]any{"signed_in": true, "signed_out": false}, nil
+	})}
+	client.events = nil
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Method != http.MethodGet || request.URL.String() != Origin+ConversationListPath ||
+			request.Header.Get("Cookie") != "__Secure-next-auth.session-token=after-native-read" {
+			t.Fatalf("retained read used wrong request shape or stale cookie: method=%s path=%s cookie_fresh=%t", request.Method, request.URL.Path, request.Header.Get("Cookie") == "__Secure-next-auth.session-token=after-native-read")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
+	})}
+	result := RefreshAuth(context.Background(), AuthRefreshConfig{
+		BrowserConfig: BrowserConfig{Client: client, Engine: engine, Journal: journal},
+		Store:         store, ObservationTimeout: 10 * time.Millisecond, Now: func() time.Time { return now }, HTTPClient: httpClient,
+	})
+	if !result.OK || requests != 1 || result.Cleanup.State != webagent.CleanupClosed {
+		t.Fatalf("retained refresh: ok=%t requests=%d error=%+v cleanup=%s", result.OK, requests, result.Error, result.Cleanup.State)
+	}
+	template, err := store.LoadTemplate(context.Background())
+	if err != nil || template.Source != "headed-cdp-retained-read-shape" || template.CapturedAt != now.Format(time.RFC3339Nano) || template.CookieHeader != "__Secure-next-auth.session-token=after-native-read" {
+		t.Fatalf("retained template not refreshed safely: source=%s captured=%s cookie_fresh=%t err=%v", template.Source, template.CapturedAt, template.CookieHeader == "__Secure-next-auth.session-token=after-native-read", err)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefreshAuthRetainedReadFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"rejected", 401, `{}`}, {"invalid json", 200, `not-json`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			store := newReadTestStore(t, now.Add(-2*time.Hour))
+			before, err := store.LoadTemplate(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &rotatingAuthReadBrowser{newAuthenticatedReadBrowser(func(string, *testsupport.Browser) (any, error) {
+				return map[string]any{"signed_in": true, "signed_out": false}, nil
+			})}
+			client.events = nil
+			engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
+				return &http.Response{StatusCode: tc.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			})}
+			result := RefreshAuth(context.Background(), AuthRefreshConfig{
+				BrowserConfig: BrowserConfig{Client: client, Engine: engine, Journal: journal},
+				Store:         store, ObservationTimeout: 10 * time.Millisecond, Now: func() time.Time { return now }, HTTPClient: httpClient,
+			})
+			if result.OK || result.Error == nil || result.Error.Code != "chatgpt_read_request_not_observed" || requests != 1 {
+				t.Fatalf("retained failure: ok=%t error=%+v requests=%d", result.OK, result.Error, requests)
+			}
+			after, err := store.LoadTemplate(context.Background())
+			if err != nil || after.CapturedAt != before.CapturedAt {
+				t.Fatalf("failed refresh changed stale template: %v", err)
+			}
+			if err := result.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRefreshAuthRetainedReadNeedsCurrentSessionCookie(t *testing.T) {
+	now := time.Now().UTC()
+	store := newReadTestStore(t, now.Add(-2*time.Hour))
+	client := &noCookieAuthReadBrowser{newAuthenticatedReadBrowser(func(string, *testsupport.Browser) (any, error) {
+		return map[string]any{"signed_in": true, "signed_out": false}, nil
+	})}
+	client.events = nil
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, fmt.Errorf("unexpected request")
+	})}
+	result := RefreshAuth(context.Background(), AuthRefreshConfig{
+		BrowserConfig: BrowserConfig{Client: client, Engine: engine, Journal: journal},
+		Store:         store, ObservationTimeout: 10 * time.Millisecond, HTTPClient: httpClient,
+	})
+	if result.OK || result.Error == nil || result.Error.Code != "chatgpt_read_request_not_observed" || requests != 0 {
+		t.Fatalf("cookie-less retained refresh: ok=%t error=%+v requests=%d", result.OK, result.Error, requests)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type noCookieAuthReadBrowser struct{ *authenticatedReadBrowser }
+
+func (b *noCookieAuthReadBrowser) CallSession(ctx context.Context, sessionID, method string, params, result any) error {
+	if method == "Network.getCookies" {
+		return json.Unmarshal([]byte(`{"cookies":[]}`), result)
+	}
+	return b.authenticatedReadBrowser.CallSession(ctx, sessionID, method, params, result)
 }
 
 // A reload cancels the page's in-flight read. The native read can need eight

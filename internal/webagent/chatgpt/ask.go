@@ -129,6 +129,8 @@ type selectionObservation struct {
 	ThinkingSliderValue   int      `json:"thinking_slider_value,omitempty"`
 	Model                 string   `json:"model"`
 	ModelAction           string   `json:"model_action"`
+	ModelEffectivePolicy  string   `json:"model_effective_policy"`
+	ModelFallbackReason   string   `json:"model_fallback_reason,omitempty"`
 	ModelOptions          []string `json:"model_options"`
 	Reason                string   `json:"reason"`
 	expectation           thinkingSelectionExpectation
@@ -673,6 +675,11 @@ func Ask(
 			data.Metadata["available_thinking"] =
 				append([]string{}, selection.IntelligenceOptions...)
 			data.Metadata["model_selection_action"] = selection.ModelAction
+			data.Metadata["model_policy_requested"] = config.Selection.Model
+			data.Metadata["model_policy_effective"] = selection.ModelEffectivePolicy
+			if selection.ModelFallbackReason != "" {
+				data.Metadata["model_fallback_reason"] = selection.ModelFallbackReason
+			}
 			data.Metadata["available_models"] =
 				append([]string{}, selection.ModelOptions...)
 			recordSelectionExpectation(data.Metadata, selection)

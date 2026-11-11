@@ -475,10 +475,11 @@ func selectChatGPT(
 	poll time.Duration,
 ) (selectionObservation, error) {
 	observation := selectionObservation{
-		ProductMode:        "Chat",
-		ProductAction:      "already_selected",
-		IntelligenceAction: "already_selected",
-		ModelAction:        "not_requested",
+		ProductMode:          "Chat",
+		ProductAction:        "already_selected",
+		IntelligenceAction:   "already_selected",
+		ModelAction:          "not_requested",
+		ModelEffectivePolicy: policy.Model,
 	}
 	deadline := time.Now().Add(timeout)
 	var surface selectionSurface
@@ -667,9 +668,17 @@ func selectChatGPT(
 		if policy.Model == ModelHighest {
 			option, ok := highestReadyModelOption(surface.ModelOptions)
 			if !ok {
-				return observation, fmt.Errorf(
-					"highest ChatGPT model option is unavailable",
-				)
+				// A checked radio is a verified current selection even when no
+				// model radio is actionable. Never click a disabled option.
+				option, ok = exactOption(surface.ModelOptions, surface.SelectedModel)
+				if !ok || !option.Checked || strings.TrimSpace(option.Label) == "" {
+					return observation, fmt.Errorf(
+						"highest ChatGPT model option is unavailable",
+					)
+				}
+				observation.ModelAction = "fallback_current"
+				observation.ModelEffectivePolicy = ModelCurrent
+				observation.ModelFallbackReason = "highest_unavailable"
 			}
 			requestedModel = option.Label
 		}
@@ -684,7 +693,9 @@ func selectChatGPT(
 			)
 		}
 		if modelOption.Checked {
-			observation.ModelAction = "already_selected"
+			if observation.ModelAction != "fallback_current" {
+				observation.ModelAction = "already_selected"
+			}
 			observation.Model = modelOption.Label
 		} else {
 			if err := activateSelectionControl(

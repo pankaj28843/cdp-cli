@@ -27,6 +27,23 @@ func TestSelectChatGPTAcceptsPinnedCheckedModelWithoutClick(t *testing.T) {
 	}
 }
 
+func TestSelectChatGPTHighestFallsBackOnlyToCheckedModel(t *testing.T) {
+	for _, checked := range []bool{true, false} {
+		client := &pinnedModelClient{checked: checked}
+		got, err := selectChatGPT(context.Background(), newSelectionActivationSession(t, client), SelectionPolicy{Thinking: "Pro", MinimumThinking: "Pro", Model: ModelHighest}, false, 250*time.Millisecond, time.Millisecond)
+		if checked {
+			if err != nil || got.Model != "GPT-6" || got.ModelAction != "fallback_current" || got.ModelFallbackReason != "highest_unavailable" || got.ModelEffectivePolicy != ModelCurrent {
+				t.Fatalf("checked fallback = %+v, err=%v", got, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "unavailable") {
+			t.Fatalf("unverified fallback accepted: %+v, err=%v", got, err)
+		}
+		if client.optionClicks != 0 {
+			t.Fatal("clicked a pinned or disabled model")
+		}
+	}
+}
+
 type pinnedModelClient struct {
 	lateSelectionClient
 	open, checked bool
