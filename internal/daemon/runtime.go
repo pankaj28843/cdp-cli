@@ -1149,6 +1149,10 @@ func CallRuntimeWithOwner(ctx context.Context, runtime Runtime, ownerID, session
 		return nil, fmt.Errorf("connect daemon rpc socket: %w", err)
 	}
 	defer conn.Close()
+	// Deadlines alone do not interrupt a read when the caller cancels early.
+	// Close only this RPC socket so collectors can run their session cleanup.
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}

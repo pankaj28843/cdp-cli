@@ -1663,7 +1663,7 @@ func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(con
 	}
 	leased, _, err := client.BeginLease(ctx, daemon.DefaultInvocationLeaseTTL)
 	if err == nil {
-		return leased, leased.EndLease, nil
+		return leased, browserLeaseCleanup(leased), nil
 	}
 	if daemon.IsInvocationLeaseUnsupported(err) {
 		// Keep an older, still-running daemon usable while the scheduled
@@ -1681,12 +1681,20 @@ func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, fu
 	}
 	leased, _, err := client.BeginLease(ctx, daemon.DefaultInvocationLeaseTTL)
 	if err == nil {
-		return leased, leased.EndLease, nil
+		return leased, browserLeaseCleanup(leased), nil
 	}
 	if daemon.IsInvocationLeaseUnsupported(err) {
 		return client, func(context.Context) error { return nil }, nil
 	}
 	return nil, nil, err
+}
+
+func browserLeaseCleanup(client daemon.RuntimeClient) func(context.Context) error {
+	return func(ctx context.Context) error {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return client.EndLease(cleanupCtx)
+	}
 }
 
 func (a *app) daemonRuntimeClient(ctx context.Context) (daemon.RuntimeClient, error) {

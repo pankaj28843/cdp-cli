@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"nhooyr.io/websocket"
@@ -23,7 +24,10 @@ type pageSessionFakeClient struct {
 	responses map[string]error
 }
 
-func (c *pageSessionFakeClient) Call(_ context.Context, method string, _ any, result any) error {
+func (c *pageSessionFakeClient) Call(ctx context.Context, method string, _ any, result any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if method == "Target.attachToTarget" && result != nil {
 		value := reflect.ValueOf(result)
 		if value.Kind() == reflect.Pointer && !value.IsNil() {
@@ -57,6 +61,38 @@ func (c *pageSessionFakeClient) callCount(method string) int {
 		}
 	}
 	return count
+}
+
+func TestPageSessionCloseAfterCancellation(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if expired {
+			cancel()
+			ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		}
+		cancel()
+		client := &pageSessionFakeClient{}
+		closed := false
+		session, err := cdp.AttachToTargetWithClient(context.Background(), client, "fixture-target", func(cleanup context.Context) error {
+			if cleanup.Err() != nil {
+				t.Fatal("transport cleanup inherited cancellation")
+			}
+			if deadline, ok := cleanup.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
+				t.Fatal("transport cleanup must have a bounded deadline")
+			}
+			closed = true
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := session.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !closed || client.callCount("Target.detachFromTarget") != 1 {
+			t.Fatal("canceled operation leaked its session or transport")
+		}
+	}
 }
 
 func TestPageSessionCloseIsIdempotentAndPreservesCleanupErrors(t *testing.T) {

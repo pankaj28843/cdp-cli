@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -148,6 +149,65 @@ def main():
                 run("page", "close", "--target", target)
                 targets.remove(target)
                 print(json.dumps({"case": case, "passed": True, **counts}))
+            for scheme, popup in (("basic", False), ("ntlm", False), ("ntlm", True)):
+                for stop_signal in (signal.SIGTERM, signal.SIGINT):
+                    case = f"cancel-{scheme}-popup-{popup}-{stop_signal.name}"
+                    target = run("open", origin + "/")["page"]["id"]
+                    targets.append(target)
+                    ready = root / (case + "-ready.json")
+                    command = prefix + ["network", "auth", "--scheme", scheme, "--origin", origin,
+                        "--username-env", "CDP_TEST_AUTH_USER", "--password-env", "CDP_TEST_AUTH_PASS",
+                        "--target", target, "--ready-file", str(ready), "--duration", "5m", "--json"]
+                    if popup:
+                        command.append("--popup-prearm")
+                    process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+                                               stderr=subprocess.PIPE, text=True)
+                    try:
+                        deadline = time.monotonic() + 8
+                        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                            time.sleep(.05)
+                        assert ready.exists(), "cancellation fixture readiness missing"
+                        if popup:
+                            run("Runtime.evaluate", json.dumps({"expression": "window.open(" + json.dumps(origin + "/") + ") !== null",
+                                "returnByValue": True, "userGesture": True}), "--target-id", target)
+                        # Let the collector return to its idle event read before cancellation.
+                        time.sleep(.2)
+                        started = time.monotonic()
+                        process.send_signal(stop_signal)
+                        stdout, _ = process.communicate(timeout=6)
+                        report = json.loads(stdout)
+                        assert report.get("data", {}).get("cleanup_complete") is True, "canceled auth cleanup incomplete"
+                        assert not ready.exists(), "canceled collector retained its readiness file"
+                        probe = "(async()=>{const r=await fetch('/',{cache:'no-store',signal:AbortSignal.timeout(3000)});return r.status===200})()"
+                        assert run("eval", probe, "--target", target)["result"]["value"] is True, "retained root cannot fetch"
+                        restored = run("eval", "!window.__cdpPopupAuthOwner && window.open.name !== 'cdpPrearmPopup'", "--target", target)
+                        assert restored["result"]["value"] is True, "canceled popup hook not restored"
+                        children = run("Target.getTargets", "{}")['result']['targetInfos']
+                        for child in children:
+                            if child.get('openerId') == target:
+                                targets.append(child['targetId'])
+                                assert run("eval", probe, "--target", child['targetId'])["result"]["value"] is True, "retained child cannot fetch"
+                                run("page", "close", "--target", child['targetId'])
+                                targets.remove(child['targetId'])
+                        print(json.dumps({"case": case, "passed": True,
+                                          "cancel_seconds": round(time.monotonic() - started, 2)}))
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.communicate(timeout=5)
+                    run("page", "close", "--target", target)
+                    targets.remove(target)
+            target = run("open", origin + "/")["page"]["id"]
+            targets.append(target)
+            timed_out = subprocess.run(prefix + ["eval", "new Promise(()=>{})", "--target", target,
+                "--timeout", "1s", "--json"], env=env, capture_output=True, text=True, timeout=8)
+            assert timed_out.returncode != 0, "pending eval did not time out"
+            info = run("Target.getTargets", "{}")['result']['targetInfos']
+            assert next(t for t in info if t['targetId'] == target)['attached'] is False, "timed-out eval leaked its session"
+            assert run("eval", "1+1", "--target", target)["result"]["value"] == 2, "target unusable after eval timeout"
+            run("page", "close", "--target", target)
+            targets.remove(target)
+            print(json.dumps({"case": "eval-timeout-session-cleanup", "passed": True}))
         finally:
             for target in targets:
                 subprocess.run(prefix + ["page", "close", "--target", target, "--json"], env=env, capture_output=True, timeout=15)

@@ -718,5 +718,9 @@ requires ordinary same-origin `window.open` semantics; `noopener`/`noreferrer`,
 blocked popups, navigation away, and ambiguous children fail closed. Do not combine
 with `--reload`. Cleanup restores the hook, disables owned interception/debugging,
 and detaches sessions; it closes only an unarmed child created by its own hook.
+SIGINT and SIGTERM interrupt an idle collector immediately, then run bounded
+cleanup. The readiness file is removed, and retained root and armed child tabs
+remain usable for subsequent requests. Cancellation returns an error envelope
+whose `data.cleanup_complete` reports whether cleanup succeeded.
 The report counts interception actions, not successful application login. MFA
 remains a human action; do not reload, resend, or retry when its number appears.

@@ -134,6 +134,11 @@ architecture is intentionally small: keep browser protocol mechanics in
   If a request disconnects after creating a target, registration failure still
   uses a separate bounded cleanup context to close only that exact target;
   explicit lease recovery remains a named background cleanup boundary.
+- Daemon RPC clients close their exact per-call socket on context cancellation,
+  including cancellation before a distant deadline. This releases idle event
+  reads and blocked writes so collectors can disable interception and detach
+  their sessions with a separate bounded cleanup context. Other RPC calls and
+  the daemon's browser connection remain usable.
 - Daemon RPC response delivery uses one bounded context-aware writer. Final
   envelopes use a cancellation-independent delivery context so an operation
   that has just ended can still return its existing error or result envelope;

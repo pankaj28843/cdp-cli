@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -160,6 +161,9 @@ func (s *PageSession) Close(ctx context.Context) error {
 		return nil
 	}
 	s.closeOnce.Do(func() {
+		// Close is resource cleanup, including when the operation timed out.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
 		var errs []error
 		if s.SessionID != "" {
 			if err := s.client.Call(ctx, "Target.detachFromTarget", map[string]any{"sessionId": s.SessionID}, nil); err != nil {
